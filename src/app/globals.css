@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Semantic CSS variables (--sms-*) are injected by the Tailwind plugin in
+ * tailwind.config.ts from src/lib/design/tokens.ts. Nothing colour-related
+ * should be declared literally in this file.
+ */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Native focus rings are replaced by the `.focus-ring` utility everywhere. */
+  :focus-visible {
+    outline-color: rgb(var(--sms-focus));
+  }
+
+  ::selection {
+    background-color: rgb(var(--sms-brand) / 0.22);
+  }
+
+  /* Scrollbars — subtle, themed. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--sms-border-strong)) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--sms-border-strong));
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--sms-ink-subtle));
+    background-clip: content-box;
+  }
+
+  /* Kill the native number-input spinners — we ship a custom Stepper. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  /* Frosted layer used by modals, drawers and the sticky app header. */
+  .glass {
+    background-color: rgb(var(--sms-surface) / 0.72);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+  }
+
+  /* Editorial eyebrow label above section headings. */
+  .eyebrow {
+    @apply text-2xs font-semibold uppercase tracking-[0.14em] text-ink-subtle;
+  }
+
+  /* Tabular figures for any column of numbers. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/**
+ * Print — the prep checklist gets taped to the kitchen wall, so printing has to
+ * produce something legible in black and white on one or two sheets.
+ */
+@media print {
+  :root {
+    color-scheme: light;
+  }
+
+  /* Chrome that means nothing on paper. */
+  aside,
+  header.glass,
+  nav,
+  [role='region'][aria-label='Notifications'],
+  .print-hide {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Undo the sidebar offset. */
+  .lg\:pl-64 {
+    padding-left: 0 !important;
+  }
+
+  main {
+    padding: 0 !important;
+  }
+
+  /* Flatten cards into plain ruled blocks. */
+  [class*='rounded-xl'],
+  [class*='rounded-lg'] {
+    box-shadow: none !important;
+    border-color: #999 !important;
+  }
+
+  /* Keep a sauce and its checklist steps on the same page. */
+  li,
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+}

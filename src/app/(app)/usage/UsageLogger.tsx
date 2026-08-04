@@ -1,0 +1,398 @@
+'use client'
+
+import * as React from 'react'
+import { useRouter } from 'next/navigation'
+import { motion } from 'framer-motion'
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Icon,
+  ProgressBar,
+  SegmentedControl,
+  StatCard,
+  Stepper,
+  Table,
+  Tooltip,
+  useToast,
+} from '@/components/ui'
+import { BagSizeBadge, StockBadge } from '@/components/app/StatusPills'
+import { recordUsage } from '@/lib/actions/usage'
+import {
+  daysUntilNextPrep,
+  formatRelativeDay,
+  formatShort,
+  nextPrepDayAfter,
+  today,
+  WEEKDAY_SHORT,
+  weekdayOf,
+  type DateOnly,
+} from '@/lib/date'
+import { motion as motionTokens } from '@/lib/design/tokens'
+import type { UsageEntry } from '@/lib/queries/activity'
+import type { LiveStockRow } from '@/lib/types/database'
+
+export interface UsageLoggerProps {
+  siteId: string | null
+  siteName: string
+  showSiteColumn: boolean
+  stock: LiveStockRow[]
+  burnRates: Record<string, number>
+  loggedToday: Record<string, number>
+  recent: UsageEntry[]
+  dailyTotals: Array<{ date: DateOnly; bags: number }>
+  isManager: boolean
+}
+
+export function UsageLogger({
+  siteId,
+  siteName,
+  showSiteColumn,
+  stock,
+  burnRates,
+  loggedToday,
+  recent,
+  dailyTotals,
+  isManager,
+}: UsageLoggerProps) {
+  const router = useRouter()
+  const { toast } = useToast()
+
+  const [view, setView] = React.useState<'log' | 'history'>('log')
+  const [quantities, setQuantities] = React.useState<Record<string, number>>({})
+  const [pendingSauce, setPendingSauce] = React.useState<string | null>(null)
+  const [busy, startTransition] = React.useTransition()
+
+  const asOf = today()
+  const daysToRestock = daysUntilNextPrep(asOf)
+  const nextPrep = nextPrepDayAfter(asOf)
+
+  // One row per sauce at the site being written to.
+  const rows = React.useMemo(() => {
+    const bySauce = new Map<string, LiveStockRow & { burnRate: number; logged: number }>()
+
+    for (const row of stock) {
+      if (siteId && row.site_id !== siteId) continue
+      const existing = bySauce.get(row.sauce_id)
+      if (existing) {
+        existing.usable_bags += row.usable_bags
+        existing.sealed_bags += row.sealed_bags
+        existing.opened_bags += row.opened_bags
+        existing.par_level += row.par_level
+        continue
+      }
+      bySauce.set(row.sauce_id, {
+        ...row,
+        burnRate: burnRates[row.sauce_id] ?? 0,
+        logged: loggedToday[row.sauce_id] ?? 0,
+      })
+    }
+
+    return Array.from(bySauce.values()).sort((a, b) => a.sauce_name.localeCompare(b.sauce_name))
+  }, [stock, siteId, burnRates, loggedToday])
+
+  const totals = React.useMemo(() => {
+    const loggedBags = Object.values(loggedToday).reduce((sum, value) => sum + value, 0)
+    const atRisk = rows.filter(
+      (row) => row.burnRate > 0 && row.usable_bags < row.burnRate * daysToRestock,
+    ).length
+    return {
+      loggedBags,
+      loggedSauces: Object.keys(loggedToday).length,
+      atRisk,
+      totalStock: rows.reduce((sum, row) => sum + row.usable_bags, 0),
+    }
+  }, [loggedToday, rows, daysToRestock])
+
+  const peakDaily = Math.max(...dailyTotals.map((day) => day.bags), 1)
+
+  const submit = (sauceId: string, sauceName: string) => {
+    const bags = quantities[sauceId] ?? 0
+    if (bags < 1) return
+
+    setPendingSauce(sauceId)
+    startTransition(async () => {
+      const result = await recordUsage({ sauceId, bags, siteId: siteId ?? undefined })
+      setPendingSauce(null)
+
+      if (!result.ok) {
+        toast({ tone: 'danger', title: 'Could not log usage', description: result.error })
+        return
+      }
+
+      const shortfall = result.data?.shortfall ?? 0
+      toast({
+        tone: shortfall > 0 ? 'warning' : 'success',
+        title: `${bags} bag${bags === 1 ? '' : 's'} of ${sauceName} logged`,
+        description:
+          shortfall > 0
+            ? `Only ${result.data?.opened} sealed bags were available — ${shortfall} more were used than the system had recorded. Check the batch log.`
+            : 'Each opened bag now has 2 days of life, capped at its sealed date.',
+      })
+
+      setQuantities((current) => ({ ...current, [sauceId]: 0 }))
+      router.refresh()
+    })
+  }
+
+  if (!siteId) {
+    return (
+      <EmptyState
+        icon="map-pin"
+        title="No site assigned"
+        description="Your account isn't linked to a kitchen. Ask a manager to set this in Settings → Staff."
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Logged today"
+          value={totals.loggedBags}
+          unit="bags"
+          icon="clipboard-list"
+          tone="brand"
+          hint={`${totals.loggedSauces} sauce${totals.loggedSauces === 1 ? '' : 's'} recorded`}
+        />
+        <StatCard
+          label="Live stock"
+          value={totals.totalStock}
+          unit="bags"
+          icon="package"
+          tone="neutral"
+          hint={siteName}
+        />
+        <StatCard
+          label="Won't reach restock"
+          value={totals.atRisk}
+          unit="sauces"
+          icon="trending-down"
+          tone={totals.atRisk > 0 ? 'danger' : 'success'}
+          hint={`Next prep ${formatShort(nextPrep.date)}`}
+        />
+        <StatCard
+          label="Days to next prep"
+          value={daysToRestock}
+          unit={daysToRestock === 1 ? 'day' : 'days'}
+          icon="calendar"
+          tone="neutral"
+          hint={formatRelativeDay(nextPrep.date)}
+        />
+      </div>
+
+      <SegmentedControl
+        aria-label="Usage view"
+        value={view}
+        onChange={(value) => setView(value as 'log' | 'history')}
+        options={[
+          { value: 'log', label: "Log today's usage", icon: 'plus' },
+          { value: 'history', label: 'History', icon: 'history' },
+        ]}
+      />
+
+      {view === 'log' ? (
+        <Card padded={false}>
+          <div className="border-b border-border p-5">
+            <CardHeader
+              className="mb-0"
+              eyebrow={formatRelativeDay(asOf)}
+              title={`Bags opened at ${siteName}`}
+              description="Tap the stepper, then Log. Logging the same sauce twice adds to the day's total rather than replacing it."
+            />
+          </div>
+
+          {rows.length === 0 ? (
+            <EmptyState
+              icon="package"
+              title="No sauces to log"
+              description="Add sauces in Settings and they'll appear here."
+            />
+          ) : (
+            <ul className="divide-y divide-border">
+              {rows.map((row, index) => {
+                const willRunOut =
+                  row.burnRate > 0 && row.usable_bags < row.burnRate * daysToRestock
+                const quantity = quantities[row.sauce_id] ?? 0
+
+                return (
+                  <motion.li
+                    key={row.sauce_id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{
+                      delay: Math.min(index * 0.015, 0.2),
+                      duration: motionTokens.duration.base,
+                    }}
+                    className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-ink">{row.sauce_name}</span>
+                        <BagSizeBadge size={row.bag_size} />
+                        {row.logged > 0 ? (
+                          <Badge tone="success" size="sm" icon="check">
+                            {row.logged} today
+                          </Badge>
+                        ) : null}
+                        {willRunOut ? (
+                          <Tooltip content={`Using ~${row.burnRate}/day with ${daysToRestock} days until restock.`}>
+                            <span>
+                              <Badge tone="danger" size="sm" icon="trending-down">
+                                short
+                              </Badge>
+                            </span>
+                          </Tooltip>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
+                        <StockBadge usable={row.usable_bags} par={row.par_level} size="sm" />
+                        <span>
+                          {row.sealed_bags} sealed · {row.opened_bags} open
+                        </span>
+                        <span>~{row.burnRate} bags/day</span>
+                      </div>
+
+                      <ProgressBar
+                        className="mt-2.5 max-w-sm"
+                        size="sm"
+                        value={row.usable_bags}
+                        max={Math.max(row.par_level, row.usable_bags, 1)}
+                        marker={row.par_level > 0 ? row.par_level : undefined}
+                        tone={
+                          willRunOut
+                            ? 'danger'
+                            : row.par_level > 0 && row.usable_bags < row.par_level * 0.6
+                              ? 'warning'
+                              : 'success'
+                        }
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2.5 sm:shrink-0">
+                      <Stepper
+                        value={quantity}
+                        onChange={(value) =>
+                          setQuantities((current) => ({ ...current, [row.sauce_id]: value }))
+                        }
+                        min={0}
+                        max={200}
+                        unit="bags"
+                      />
+                      <Button
+                        size="lg"
+                        leadingIcon="check"
+                        disabled={quantity < 1}
+                        loading={busy && pendingSauce === row.sauce_id}
+                        onClick={() => submit(row.sauce_id, row.sauce_name)}
+                      >
+                        Log
+                      </Button>
+                    </div>
+                  </motion.li>
+                )
+              })}
+            </ul>
+          )}
+        </Card>
+      ) : (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader
+              eyebrow="Last 14 days"
+              title="Bags opened per day"
+              description="The shape of demand — weekends and Fridays usually run hottest."
+            />
+            <div className="flex h-40 items-end gap-1.5">
+              {dailyTotals.map((day) => (
+                <div key={day.date} className="flex flex-1 flex-col items-center gap-1.5">
+                  <Tooltip content={`${day.bags} bags on ${formatShort(day.date)}`}>
+                    <motion.div
+                      initial={{ height: 0 }}
+                      animate={{ height: `${Math.max((day.bags / peakDaily) * 100, 3)}%` }}
+                      transition={{ duration: motionTokens.duration.slower, ease: motionTokens.ease.out }}
+                      className={`w-full rounded-t-md ${
+                        day.date === asOf ? 'bg-brand' : 'bg-brand/35'
+                      }`}
+                      style={{ minHeight: 4 }}
+                    />
+                  </Tooltip>
+                  <span className="text-2xs text-ink-subtle">
+                    {WEEKDAY_SHORT[weekdayOf(day.date)][0]}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Table
+            rows={recent}
+            rowKey={(row) => row.id}
+            caption="Recent usage logs"
+            empty={{
+              icon: 'clipboard-list',
+              title: 'No usage logged yet',
+              description: 'Switch to “Log today’s usage” and record the first bags of the day.',
+            }}
+            columns={[
+              {
+                key: 'date',
+                header: 'Date',
+                cell: (row) => (
+                  <div>
+                    <span className="font-medium text-ink">{formatRelativeDay(row.usage_date)}</span>
+                    <span className="block text-2xs text-ink-subtle">
+                      {formatShort(row.usage_date)}
+                    </span>
+                  </div>
+                ),
+              },
+              {
+                key: 'sauce',
+                header: 'Sauce',
+                cell: (row) => <span className="font-medium text-ink">{row.sauceName}</span>,
+              },
+              ...(showSiteColumn
+                ? [
+                    {
+                      key: 'site',
+                      header: 'Site',
+                      hideOnMobile: true,
+                      cell: (row: UsageEntry) => (
+                        <span className="inline-flex items-center gap-1.5 text-ink-muted">
+                          <Icon name="map-pin" size={13} />
+                          {row.siteName}
+                        </span>
+                      ),
+                    },
+                  ]
+                : []),
+              {
+                key: 'bags',
+                header: 'Bags opened',
+                align: 'right',
+                cell: (row) => <span className="font-semibold text-ink">{row.bags_opened}</span>,
+              },
+              ...(isManager
+                ? [
+                    {
+                      key: 'by',
+                      header: 'Logged by',
+                      hideOnMobile: true,
+                      cell: (row: UsageEntry) => (
+                        <span className="text-ink-muted">{row.loggedByName ?? '—'}</span>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
