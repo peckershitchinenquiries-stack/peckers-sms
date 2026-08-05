@@ -1,17 +1,22 @@
 /**
- * Seeds a Supabase project with everything needed to use the app immediately:
+ * DEVELOPMENT / STAGING ONLY — never run this against production.
+ *
+ * Seeds a Supabase project with everything needed to demo the app immediately:
  *
  *   • 2 sites (Stevenage, Hitchin)
  *   • the 15 house sauces with correct bag sizes
  *   • par levels per sauce per site
- *   • 3 demo accounts (1 manager, 2 kitchen staff)
+ *   • 3 demo accounts (1 manager, 2 kitchen staff) with a password YOU set
  *   • 6 weeks of realistic daily usage, with deliberate weekday spikes so the
  *     forecast engine and pattern detection have something real to chew on
  *   • historical prep sessions + bags, aged and consumed correctly
  *   • live stock with a mix of sealed, opened and expiring-today bags
  *   • a forecast plan for the upcoming prep day
  *
- * Run with:  npm run db:seed
+ * For production, use `npm run db:seed` (reference data only, no fake users
+ * or history) plus `npm run db:create-manager` for your real first account.
+ *
+ * Run with:  SEED_DEMO_PASSWORD='...' npm run db:seed:demo
  */
 
 import { config as loadEnv } from 'dotenv'
@@ -38,7 +43,17 @@ loadEnv({ path: '.env' })
 /* -------------------------------------------------------------------------- */
 
 const HISTORY_DAYS = 42 // 6 weeks — comfortably more than the 28-day window
-const DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD ?? 'PeckersSMS2026!'
+
+// No fallback: a known default password must never be a thing this script can
+// silently create. You must set one explicitly every time.
+const DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD
+if (!DEMO_PASSWORD || DEMO_PASSWORD.length < 8) {
+  console.error(
+    '\n  Set SEED_DEMO_PASSWORD (8+ characters) before running the demo seed.\n' +
+      "  e.g. SEED_DEMO_PASSWORD='something-only-you-know' npm run db:seed:demo\n",
+  )
+  process.exit(1)
+}
 
 const DEMO_USERS = [
   {

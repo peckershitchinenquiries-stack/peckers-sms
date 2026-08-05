@@ -10,8 +10,8 @@ It digitises the whole sauce lifecycle: forecast how much to prepare → log wha
 
 - [The business rules](#the-business-rules)
 - [Tech stack](#tech-stack)
-- [Quick start](#quick-start)
-- [Demo accounts](#demo-accounts)
+- [Quick start (production / staging)](#quick-start-production--staging)
+- [Local development with demo data](#local-development-with-demo-data)
 - [Supabase setup in detail](#supabase-setup-in-detail)
 - [The forecast engine](#the-forecast-engine)
 - [Notifications and the daily digest](#notifications-and-the-daily-digest)
@@ -69,9 +69,9 @@ Row Level Security enforces this at the database level: staff physically cannot 
 
 ---
 
-## Quick start
+## Quick start (production / staging)
 
-**Prerequisites:** Node 20+, a Supabase project (free tier is fine), and the [Supabase CLI](https://supabase.com/docs/guides/cli).
+**Prerequisites:** Node 20+ and a Supabase project. The Supabase CLI is invoked via `npx`, so nothing needs installing globally.
 
 ```bash
 # 1. Install
@@ -79,23 +79,32 @@ npm install
 
 # 2. Configure
 cp .env.example .env.local
-#    then fill in NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY
+#    fill in NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY
 #    and SUPABASE_SERVICE_ROLE_KEY from Supabase → Project Settings → API
 
-# 3. Apply the schema
-supabase link --project-ref <your-project-ref>
-supabase db push
+# 3. Apply the schema — see "Supabase setup in detail" below for both
+#    the CLI method and the manual SQL-editor fallback
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
 
-# 4. Seed sites, sauces, demo users and 6 weeks of realistic history
+# 4. Seed reference data only — 2 sites, 15 sauces, starting par levels.
+#    No fake users, no fake history.
 npm run db:seed
 
-# 5. Run
-npm run dev
+# 5. Create your real first login (not a demo account).
+#    ⚠ Replace ALL THREE values below with your own — do not run this
+#    line as-is, it is an example, not a working command.
+MANAGER_EMAIL=<your-email> MANAGER_NAME="<your-name>" MANAGER_PASSWORD='<your-password>' \
+  npm run db:create-manager
+
+# 6. Build and run
+npm run build && npm start
 ```
 
-Open <http://localhost:3000> and sign in with one of the demo accounts below.
+Sign in at your deployed URL with the email/password from step 5.
 
-The design system is browsable without signing in at <http://localhost:3000/gallery>.
+The design system is browsable without signing in at `/gallery`.
 
 ### Scripts
 
@@ -106,33 +115,27 @@ The design system is browsable without signing in at <http://localhost:3000/gall
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (Next.js config) |
 | `npm test` | Vitest — the forecast engine and date-rule suite |
-| `npm run db:push` | Apply migrations to the linked Supabase project |
+| `npm run db:push` | Apply migrations to the linked Supabase project (`npx supabase db push`) |
 | `npm run db:reset` | Reset a **local** Supabase database and re-run every migration |
-| `npm run db:seed` | Populate reference data, demo users and demo history |
+| `npm run db:seed` | Reference data only — sites, sauces, par levels. **Safe for production.** |
+| `npm run db:create-manager` | Create one real manager account from `MANAGER_EMAIL`/`MANAGER_NAME`/`MANAGER_PASSWORD`. Re-run with a different email to add more managers. |
+| `npm run db:seed:demo` | **Dev/staging only.** Adds 3 demo accounts + 6 weeks of fake usage history. Requires `SEED_DEMO_PASSWORD` (8+ chars) — there is no default. Never run this against production. |
 
 ---
 
-## Demo accounts
+## Local development with demo data
 
-Created by `npm run db:seed`. Password for all three: **`PeckersSMS2026!`**
-(override with `SEED_DEMO_PASSWORD` before seeding).
+For a throwaway dev or staging environment where you want the dashboard, forecast and pattern detection to look alive immediately:
 
-| Email | Name | Role | Site |
-| --- | --- | --- | --- |
-| `manager@peckers.dev` | Rishi Patel | Manager | Both |
-| `staff@peckers.dev` | Swathi Raman | Kitchen staff | Stevenage |
-| `hitchin@peckers.dev` | Dan Okafor | Kitchen staff | Hitchin |
+```bash
+npm run db:seed                                    # reference data
+SEED_DEMO_PASSWORD='pick-something' npm run db:seed:demo   # demo accounts + history
+npm run dev
+```
 
-> These are demo credentials for a local/staging environment. Change them (or delete the accounts) before this touches production.
+`db:seed:demo` creates three accounts — one manager, two kitchen staff (one per site) — all using the password you passed in `SEED_DEMO_PASSWORD`. It also backdates 6 weeks of usage with deliberate, discoverable weekday patterns (Ranch and Garlic Aioli spike on Fridays, Buffalo and Supercharged OG on Saturdays, Hot Honey on Sundays), historical prep sessions with bags aged and resolved correctly, and a forecast plan already built for the upcoming prep day. Mango Pineapple is seeded as introduced ~11 days ago so the engine's new-sauce/partial-window path is visible too.
 
-### What the seed gives you
-
-- 2 sites, 15 sauces with correct bag sizes, par levels tuned per site
-- **6 weeks** of daily usage with deliberate, discoverable weekday patterns — Ranch and Garlic Aioli spike on Fridays, Buffalo and Supercharged OG on Saturdays, Hot Honey on Sundays
-- Historical prep sessions on every Tuesday and Friday, with bags aged and consumed correctly (old batches resolved as used/discarded, recent ones still live)
-- Live stock containing a realistic mix of sealed, opened and expiring-today bags
-- Mango Pineapple deliberately introduced ~11 days ago, so you can see the engine's **new sauce / partial window** path in action
-- A forecast plan already built for the upcoming prep day at both sites
+It's safe to re-run — it clears transactional data and re-seeds rather than erroring on duplicates. **It is not idempotent-safe to run against a database with real data in it**, since it deletes all bags, usage logs, prep sessions and plans before seeding. Never point `SUPABASE_SERVICE_ROLE_KEY` at production when running it.
 
 ---
 
@@ -145,8 +148,8 @@ Supabase dashboard → **New project**. Note the project ref, URL, anon key and 
 ### 2. Apply migrations
 
 ```bash
-supabase link --project-ref <your-project-ref>
-supabase db push
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
 ```
 
 Migrations run in order:
@@ -158,11 +161,32 @@ Migrations run in order:
 | `20260801000002_rls.sql` | RLS helper functions and every policy |
 | `20260801000003_functions.sql` | `open_bags`, `record_usage`, `create_batch_bags`, `consume_bags`, `resolve_alert`, `forecast_inputs` |
 
+**No CLI, or `link` won't cooperate?** Apply the four files by hand instead — open **Supabase dashboard → SQL Editor**, and run each file's contents as its own query, strictly in filename order (0000 → 0001 → 0002 → 0003).
+
+Only `0001_views.sql` and `0003_functions.sql` are safely re-runnable (`create or replace`). `0000_init.sql` (`create table`/`create type`) and `0002_rls.sql` (`create policy`) are **not** — running either a second time errors with "already exists". Wrap each file's paste in `begin;` / `commit;` so a failure partway rolls the whole file back cleanly instead of leaving it half-applied:
+
+```sql
+begin;
+-- (paste the full contents of one migration file here)
+commit;
+```
+
+If a file does error partway despite that, stop and check what's actually in the database (**Table Editor**, or `select tablename from pg_tables where schemaname = 'public';`) before retrying — don't just re-run it.
+
+`npx supabase db push` needs to know your project's database password, not just the anon/service-role keys — it'll prompt for it, or you can pass `-p` with the value from **Project Settings → Database**. If `npx supabase link` fails on auth, run `npx supabase login` first (opens a browser to authorise the CLI against your Supabase account — separate from the API keys in `.env.local`).
+
+To confirm the schema actually landed:
+
+```bash
+npx supabase db push --dry-run   # or, in the SQL Editor:
+# select count(*) from public.sauces;   -- should error "does not exist" until migrations run, 0 after
+```
+
 To develop against a local stack instead:
 
 ```bash
-supabase start
-supabase db reset   # applies all migrations to the local database
+npx supabase start
+npx supabase db reset   # applies all migrations to the local database
 ```
 
 ### 3. Disable public sign-up
@@ -175,7 +199,16 @@ Accounts are created by a manager, never self-served. In **Authentication → Pr
 npm run db:seed
 ```
 
-The seed is re-runnable: it clears transactional data (bags, usage, sessions, plans, alerts), upserts reference data, and resets the demo accounts' passwords rather than failing on duplicates.
+Populates sites, sauces and par levels only — no fake users, no fake history, safe to run against production. It's re-runnable: everything is upserted on a stable key (`slug`, or `sauce_id, site_id`), so running it again just re-syncs the catalogue rather than duplicating it.
+
+Then create your own account — never a shared or demo credential:
+
+```bash
+MANAGER_EMAIL=you@peckers.co.uk MANAGER_NAME="Your Name" MANAGER_PASSWORD='choose-a-strong-one' \
+  npm run db:create-manager
+```
+
+For fake demo data instead (dev/staging only), see [Local development with demo data](#local-development-with-demo-data).
 
 ### Schema at a glance
 
@@ -248,8 +281,8 @@ Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` (a verified sender), then add recip
 The business logic lives at `POST /api/cron/digest`, guarded by `CRON_SECRET`. The Supabase Edge Function in `supabase/functions/daily-digest` is a thin trigger for it.
 
 ```bash
-supabase functions deploy daily-digest --no-verify-jwt
-supabase secrets set APP_URL=https://your-app.vercel.app CRON_SECRET=<same value as .env>
+npx supabase functions deploy daily-digest --no-verify-jwt
+npx supabase secrets set APP_URL=https://your-app.vercel.app CRON_SECRET=<same value as .env>
 ```
 
 Then schedule it (SQL editor, with `pg_cron` and `pg_net` enabled):
@@ -285,10 +318,12 @@ curl -X POST http://localhost:3000/api/cron/digest -H "Authorization: Bearer $CR
 
 ### Supabase (backend)
 
-1. `supabase db push` against the production project.
-2. Deploy the edge function and set its secrets (above).
-3. Schedule the cron job.
-4. Add your Vercel URL to **Authentication → URL Configuration → Site URL** and redirect URLs.
+1. `npx supabase db push` against the production project (or apply the four migration files by hand in the SQL Editor — see above).
+2. `npm run db:seed` — reference data (sites, sauces, par levels).
+3. `npm run db:create-manager` — your real first login.
+4. Deploy the edge function and set its secrets (above).
+5. Schedule the cron job.
+6. Add your Vercel URL to **Authentication → URL Configuration → Site URL** and redirect URLs.
 
 ### Environment variables
 
@@ -344,7 +379,9 @@ src/
 supabase/
   migrations/                 Schema, views, RLS, functions
   functions/daily-digest/     Scheduled Edge Function
-  seed/seed.ts                Seed script
+  seed/reference.ts           Reference data — sites, sauces, par levels (prod-safe)
+  seed/create-manager.ts      Bootstrap one real manager account
+  seed/demo.ts                Demo accounts + 6 weeks of fake usage (dev/staging only)
 ```
 
 ---
@@ -384,5 +421,4 @@ npm test
 - Low-stock flag firing (and not firing) correctly
 
 Run `npm run typecheck` and `npm run lint` alongside it — both are clean, and there is no `any` used to paper over types.
-#   p e c k e r s - s m s  
- 
+#

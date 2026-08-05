@@ -11,9 +11,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:seed": "tsx supabase/seed/seed.ts",
-    "db:reset": "supabase db reset",
-    "db:push": "supabase db push"
+    "db:seed": "tsx supabase/seed/reference.ts",
+    "db:seed:demo": "tsx supabase/seed/demo.ts",
+    "db:create-manager": "tsx supabase/seed/create-manager.ts",
+    "db:reset": "npx supabase db reset",
+    "db:push": "npx supabase db push"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
