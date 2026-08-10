@@ -4,29 +4,29 @@ import { revalidatePath } from 'next/cache'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { requireSession, requireWriteSite } from '@/lib/auth'
 import { type DateOnly, today } from '@/lib/date'
-import type { OpenBagsResult } from '@/lib/types/database'
+import type { OpenStockResult } from '@/lib/types/database'
 import { fail, ok, type ActionResult } from './types'
 
 /**
- * Records the bags opened for one sauce on one day.
+ * Records the volume (ml) used for one sauce on one day.
  *
- * The RPC does two things atomically: adds to the day's usage total, and flips
- * that many sealed bags to `opened` (oldest expiry first), which starts each
- * bag's 2-day opened countdown.
+ * The RPC does two things atomically: adds to the day's usage total, and
+ * opens sealed bags (oldest expiry first) until their combined volume covers
+ * it, which starts each opened bag's 2-day countdown.
  */
 export async function recordUsage(input: {
   sauceId: string
-  bags: number
+  ml: number
   siteId?: string
   usageDate?: DateOnly
   notes?: string
-}): Promise<ActionResult<OpenBagsResult>> {
+}): Promise<ActionResult<OpenStockResult>> {
   try {
     const context = await requireSession()
     const siteId = requireWriteSite(context, input.siteId ?? context.profile.site_id)
 
-    if (!Number.isInteger(input.bags) || input.bags < 1 || input.bags > 200) {
-      return fail(new Error('Enter between 1 and 200 bags.'))
+    if (!Number.isInteger(input.ml) || input.ml < 1 || input.ml > 100_000) {
+      return fail(new Error('Enter between 1 and 100,000 ml.'))
     }
 
     const supabase = createServerSupabase()
@@ -34,7 +34,7 @@ export async function recordUsage(input: {
       p_site_id: siteId,
       p_sauce_id: input.sauceId,
       p_usage_date: input.usageDate ?? today(),
-      p_bags: input.bags,
+      p_ml: input.ml,
       p_notes: input.notes ?? null,
     })
     if (error) throw new Error(error.message)
@@ -44,7 +44,7 @@ export async function recordUsage(input: {
     revalidatePath('/today')
     revalidatePath('/dashboard')
 
-    return ok(data as OpenBagsResult)
+    return ok(data as OpenStockResult)
   } catch (error) {
     return fail(error, 'Could not log that usage.')
   }
@@ -53,21 +53,21 @@ export async function recordUsage(input: {
 /** Corrects a mis-typed figure. Does not re-open or re-seal any bags. */
 export async function correctUsageLog(input: {
   usageLogId: string
-  bags: number
+  ml: number
 }): Promise<ActionResult> {
   try {
     const context = await requireSession()
     if (!context.isManager) {
       return fail(new Error('Ask a manager to correct a usage log.'))
     }
-    if (!Number.isInteger(input.bags) || input.bags < 0 || input.bags > 500) {
-      return fail(new Error('Enter between 0 and 500 bags.'))
+    if (!Number.isInteger(input.ml) || input.ml < 0 || input.ml > 200_000) {
+      return fail(new Error('Enter between 0 and 200,000 ml.'))
     }
 
     const supabase = createServerSupabase()
     const { error } = await supabase
       .from('usage_logs')
-      .update({ bags_opened: input.bags })
+      .update({ ml_used: input.ml })
       .eq('id', input.usageLogId)
     if (error) throw new Error(error.message)
 

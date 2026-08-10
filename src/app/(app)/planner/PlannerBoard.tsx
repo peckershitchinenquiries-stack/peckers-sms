@@ -20,11 +20,13 @@ import {
   Tooltip,
   useToast,
 } from '@/components/ui'
-import { BagSizeBadge } from '@/components/app/StatusPills'
+import { PackBadge } from '@/components/app/StatusPills'
 import { ForecastExplainer } from './ForecastExplainer'
 import { generatePlan, resetPlanOverrides, setPlanItemOverride, setPlanStatus } from '@/lib/actions/planner'
 import { formatShort, WEEKDAY_SHORT, weekdayOf, type DateOnly } from '@/lib/date'
 import { motion as motionTokens } from '@/lib/design/tokens'
+import { packVolume } from '@/lib/forecast/packing'
+import { formatMl } from '@/lib/utils/volume'
 import type { SauceForecast } from '@/lib/queries/planning'
 import type { PlanView } from '@/lib/queries/planning'
 import type { PrepTypeValue, Site } from '@/lib/types/database'
@@ -40,6 +42,7 @@ export interface PlannerBoardProps {
   plan: PlanView | null
   windowDays: number
   bufferMultiplier: number
+  bagSizesMl: number[]
 }
 
 export function PlannerBoard({
@@ -53,6 +56,7 @@ export function PlannerBoard({
   plan,
   windowDays,
   bufferMultiplier,
+  bagSizesMl,
 }: PlannerBoardProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -69,26 +73,32 @@ export function PlannerBoard({
 
     return forecasts.map((forecast) => {
       const item = planItems.get(forecast.sauceId)
-      const override = item?.overrideBags ?? null
+      const override = item?.overrideMl ?? null
+      const suggested = item?.suggestedMl ?? forecast.suggestedMl
+      const final = drafts[forecast.sauceId] ?? override ?? suggested
       return {
         forecast,
         itemId: item?.id ?? null,
-        suggested: item?.suggestedBags ?? forecast.suggestedBags,
+        suggested,
         override,
-        final: drafts[forecast.sauceId] ?? override ?? item?.suggestedBags ?? forecast.suggestedBags,
+        final,
+        pack: packVolume(final, bagSizesMl),
       }
     })
-  }, [forecasts, plan, drafts])
+  }, [forecasts, plan, drafts, bagSizesMl])
 
   const totals = React.useMemo(
     () => ({
       suggested: rows.reduce((sum, row) => sum + row.suggested, 0),
       final: rows.reduce((sum, row) => sum + row.final, 0),
+      wasteMl: rows.reduce((sum, row) => sum + row.pack.wasteMl, 0),
       lowStock: rows.filter((row) => row.forecast.lowStock).length,
       lowConfidence: rows.filter((row) => row.forecast.reasoning.confidence === 'low').length,
     }),
     [rows],
   )
+  const wastePercent =
+    totals.final > 0 ? Math.round((totals.wasteMl / totals.final) * 1000) / 10 : 0
 
   const changeSite = (siteId: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -129,7 +139,7 @@ export function PlannerBoard({
       // Matching the suggestion again clears the override rather than pinning it.
       const result = await setPlanItemOverride({
         itemId,
-        overrideBags: value === suggested ? null : value,
+        overrideMl: value === suggested ? null : value,
       })
       if (!result.ok) {
         toast({ tone: 'danger', title: 'Could not save', description: result.error })
@@ -238,24 +248,22 @@ export function PlannerBoard({
       {/* ------------------------------------------------------------------ */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Bags to prepare"
-          value={totals.final}
-          unit="bags"
+          label="Volume to prepare"
+          value={formatMl(totals.final)}
           icon="package"
           tone="brand"
           hint={
             totals.final === totals.suggested
               ? 'Matches the forecast'
-              : `Forecast suggested ${totals.suggested}`
+              : `Forecast suggested ${formatMl(totals.suggested)}`
           }
         />
         <StatCard
-          label="Days covered"
-          value={coversDays}
-          unit={prepType === 'tuesday' ? 'Tue–Thu' : 'Fri–Mon'}
-          icon="calendar"
-          tone="neutral"
-          hint={coverageDates.map((date) => WEEKDAY_SHORT[weekdayOf(date)]).join(' · ')}
+          label="Pack wastage"
+          value={`${wastePercent}%`}
+          icon="trash"
+          tone={wastePercent > 8 ? 'danger' : wastePercent > 3 ? 'warning' : 'success'}
+          hint={`${formatMl(totals.wasteMl)} over the volume needed`}
         />
         <StatCard
           label="Running low"
@@ -291,7 +299,7 @@ export function PlannerBoard({
             className="mb-0"
             eyebrow={`${windowDays}-day rolling window · +${Math.round((bufferMultiplier - 1) * 100)}% buffer`}
             title="Suggested quantities"
-            description="Every number shows its working. Override anything you disagree with — the engine keeps your change on the next rebuild."
+            description="Every number shows its working. Override anything you disagree with — the engine keeps your change on the next rebuild, and the pack shown is always the least-wasteful mix of bag sizes for that volume."
           />
         </div>
 
@@ -313,7 +321,6 @@ export function PlannerBoard({
               cell: (row) => (
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-ink">{row.forecast.sauceName}</span>
-                  <BagSizeBadge size={row.forecast.bagSize} />
                   {row.forecast.lowStock ? (
                     <Tooltip content="Projected to run out before this prep day.">
                       <span className="text-danger">
@@ -331,7 +338,7 @@ export function PlannerBoard({
               hideOnMobile: true,
               cell: (row) => (
                 <div className="text-right">
-                  <span className="font-medium text-ink">{row.forecast.usableStock}</span>
+                  <span className="font-medium text-ink">{formatMl(row.forecast.usableStockMl)}</span>
                   <span className="block text-2xs text-ink-subtle">
                     {row.forecast.sealedBags} sealed · {row.forecast.openedBags} open
                   </span>
@@ -346,9 +353,9 @@ export function PlannerBoard({
               cell: (row) => (
                 <div className="text-right">
                   <span className="font-medium text-ink">
-                    {row.forecast.reasoning.burnRatePerDay}
+                    {formatMl(row.forecast.reasoning.burnRatePerDay)}
                   </span>
-                  <span className="block text-2xs text-ink-subtle">bags / day</span>
+                  <span className="block text-2xs text-ink-subtle">/ day</span>
                 </div>
               ),
             },
@@ -358,7 +365,7 @@ export function PlannerBoard({
               align: 'right',
               hideOnMobile: true,
               cell: (row) => (
-                <span className="text-ink-muted">{row.forecast.reasoning.projectedNeed}</span>
+                <span className="text-ink-muted">{formatMl(row.forecast.reasoning.projectedNeedMl)}</span>
               ),
             },
             {
@@ -371,10 +378,15 @@ export function PlannerBoard({
                   onClick={() => setExplaining(row.forecast)}
                   className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-semibold text-ink transition-colors hover:bg-surface-sunken focus-ring"
                 >
-                  {row.suggested}
+                  {formatMl(row.suggested)}
                   <Icon name="info" size={13} className="text-ink-subtle" />
                 </button>
               ),
+            },
+            {
+              key: 'pack',
+              header: 'Pack',
+              cell: (row) => <PackBadge counts={row.pack.counts} />,
             },
             {
               key: 'final',
@@ -387,7 +399,9 @@ export function PlannerBoard({
                     size="sm"
                     value={row.final}
                     min={0}
-                    max={500}
+                    max={100_000}
+                    step={100}
+                    unit="ml"
                     onChange={(value) =>
                       saveOverride(row.forecast.sauceId, row.itemId, value, row.suggested)
                     }
@@ -413,7 +427,7 @@ export function PlannerBoard({
               : 's'}
           </p>
           <p className="text-sm font-semibold text-ink">
-            Total: <span className="tabular-nums">{totals.final}</span> bags
+            Total: <span className="tabular-nums">{formatMl(totals.final)}</span>
           </p>
         </div>
       </Card>
@@ -462,9 +476,9 @@ export function PlannerBoard({
                 <p className="eyebrow">{WEEKDAY_SHORT[weekdayOf(date)]}</p>
                 <p className="mt-1 text-sm font-semibold text-ink">{formatShort(date)}</p>
                 <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-ink">
-                  {Math.round(totalForDay)}
+                  {formatMl(totalForDay)}
                 </p>
-                <p className="text-2xs text-ink-subtle">bags projected</p>
+                <p className="text-2xs text-ink-subtle">volume projected</p>
                 <ProgressBar
                   className="mt-3"
                   size="sm"
@@ -484,7 +498,7 @@ export function PlannerBoard({
       <Drawer
         open={Boolean(explaining)}
         onClose={() => setExplaining(null)}
-        title={explaining ? `Why ${explaining.suggestedBags} bags of ${explaining.sauceName}?` : ''}
+        title={explaining ? `Why ${formatMl(explaining.suggestedMl)} of ${explaining.sauceName}?` : ''}
         description="The full working behind this suggestion."
         size="lg"
       >

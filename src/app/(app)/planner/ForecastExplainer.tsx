@@ -3,8 +3,10 @@
 import * as React from 'react'
 import { motion } from 'framer-motion'
 import { Badge, Callout, Icon, ProgressBar } from '@/components/ui'
+import { PackBadge } from '@/components/app/StatusPills'
 import { motion as motionTokens } from '@/lib/design/tokens'
 import { formatShort } from '@/lib/date'
+import { formatMl } from '@/lib/utils/volume'
 import type { SauceForecast } from '@/lib/queries/planning'
 
 const confidenceTone = {
@@ -42,8 +44,7 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
           <div>
             <p className="eyebrow">Suggested</p>
             <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums text-ink">
-              {reasoning.suggestedBags}
-              <span className="ml-1.5 text-base font-medium text-ink-muted">bags</span>
+              {formatMl(reasoning.suggestedMl)}
             </p>
           </div>
           <div className="flex flex-col items-end gap-2">
@@ -55,6 +56,15 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
             </Badge>
           </div>
         </div>
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <span className="text-xs text-ink-muted">Least-wasteful pack</span>
+          <div className="flex items-center gap-2">
+            <PackBadge counts={reasoning.pack.counts} />
+            <span className="text-2xs text-ink-subtle">
+              {reasoning.pack.wasteMl > 0 ? `+${formatMl(reasoning.pack.wasteMl)} waste` : 'no waste'}
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Step-by-step ------------------------------------------------------ */}
@@ -64,8 +74,8 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
           <Step
             index={1}
             title="Measure the burn rate"
-            detail={`${reasoning.totalBagsUsed} bags used over ${reasoning.observedDays} observed days`}
-            value={`${reasoning.burnRatePerDay} / day`}
+            detail={`${formatMl(reasoning.totalMlUsed)} used over ${reasoning.observedDays} observed days`}
+            value={`${formatMl(reasoning.burnRatePerDay)} / day`}
           />
           <Step
             index={2}
@@ -85,15 +95,15 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
             index={3}
             title={`Project ${reasoning.coverageDates.length} days of demand`}
             detail={reasoning.coverageDates
-              .map((day) => `${day.weekday.slice(0, 3)} ${day.projected}`)
+              .map((day) => `${day.weekday.slice(0, 3)} ${formatMl(day.projected)}`)
               .join(' + ')}
-            value={`${reasoning.projectedNeed} bags`}
+            value={formatMl(reasoning.projectedNeedMl)}
           />
           <Step
             index={4}
             title="Subtract what's already in stock"
             detail="Sealed and opened bags both count — the kitchen can reach for either."
-            value={`− ${reasoning.usableStock} bags`}
+            value={`− ${formatMl(reasoning.usableStockMl)}`}
           />
           <Step
             index={5}
@@ -105,8 +115,8 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
             <Step
               index={6}
               title="Raise to the par level"
-              detail={`Par at this site is ${reasoning.parLevel} bags, which is above the calculated need.`}
-              value={`→ ${reasoning.suggestedBags} bags`}
+              detail={`Par at this site is ${formatMl(reasoning.parLevelMl)}, which is above the calculated need.`}
+              value={`→ ${formatMl(reasoning.suggestedMl)}`}
               highlighted
             />
           ) : null}
@@ -125,9 +135,9 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
                   <p className="text-2xs text-ink-subtle">{formatShort(day.date)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-semibold tabular-nums text-ink">{day.projected}</p>
+                  <p className="text-sm font-semibold tabular-nums text-ink">{formatMl(day.projected)}</p>
                   <p className="text-2xs text-ink-subtle">
-                    {reasoning.burnRatePerDay} × {day.multiplier}
+                    {formatMl(reasoning.burnRatePerDay)} × {day.multiplier}
                   </p>
                 </div>
               </div>
@@ -158,12 +168,12 @@ export function ForecastExplainer({ forecast }: { forecast: SauceForecast }) {
       <section>
         <h3 className="eyebrow mb-3">Inputs used</h3>
         <dl className="grid grid-cols-2 gap-3">
-          <Fact label="Usable stock" value={`${reasoning.usableStock} bags`} />
-          <Fact label="Par level" value={reasoning.parLevel > 0 ? `${reasoning.parLevel} bags` : 'Not set'} />
+          <Fact label="Usable stock" value={formatMl(reasoning.usableStockMl)} />
+          <Fact label="Par level" value={reasoning.parLevelMl > 0 ? formatMl(reasoning.parLevelMl) : 'Not set'} />
           <Fact label="Observed days" value={String(reasoning.observedDays)} />
-          <Fact label="Bags used in window" value={String(reasoning.totalBagsUsed)} />
-          <Fact label="Raw result" value={String(reasoning.rawSuggestion)} />
-          <Fact label="Rounded up to" value={`${reasoning.suggestedBags} bags`} />
+          <Fact label="Used in window" value={formatMl(reasoning.totalMlUsed)} />
+          <Fact label="Raw result" value={formatMl(reasoning.rawSuggestionMl)} />
+          <Fact label="Rounded up to" value={formatMl(reasoning.suggestedMl)} />
         </dl>
       </section>
 

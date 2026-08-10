@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Badge, type BadgeSize } from '@/components/ui/Badge'
 import { type ExpiryLevel, expiryIcon, expiryTone } from '@/lib/date'
+import { formatMl, formatPack } from '@/lib/utils/volume'
 import type { BagStatus } from '@/lib/types/database'
 
 export interface ExpiryBadgeProps {
@@ -40,10 +41,27 @@ export function BagStatusBadge({ status, size = 'sm' }: { status: BagStatus; siz
   )
 }
 
-export function BagSizeBadge({ size }: { size: '1L' | '2L' }) {
+export function BagSizeBadge({ sizeMl }: { sizeMl: number }) {
   return (
     <Badge tone="neutral" size="sm">
-      {size}
+      {formatMl(sizeMl)}
+    </Badge>
+  )
+}
+
+/** "2×2000ml + 1×500ml" pack breakdown, as a single neutral badge. */
+export function PackBadge({ counts }: { counts: Record<number, number> }) {
+  const summary = formatPack(counts)
+  if (!summary) {
+    return (
+      <Badge tone="neutral" size="sm" dot>
+        No bags
+      </Badge>
+    )
+  }
+  return (
+    <Badge tone="neutral" size="sm">
+      {summary}
     </Badge>
   )
 }
@@ -61,7 +79,7 @@ export function StockBadge({
   if (par === 0) {
     return (
       <Badge tone="neutral" size={size} dot>
-        {usable} in stock
+        {formatMl(usable)} in stock
       </Badge>
     )
   }
@@ -72,7 +90,7 @@ export function StockBadge({
 
   return (
     <Badge tone={tone} icon={icon} size={size}>
-      {usable} / {par}
+      {formatMl(usable)} / {formatMl(par)}
     </Badge>
   )
 }

@@ -6,6 +6,7 @@ import {
   weekdayOf,
 } from '@/lib/date'
 import type { ForecastReasoning } from '@/lib/types/database'
+import { DEFAULT_BAG_SIZES_ML, packVolume, type PackResult } from './packing'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
@@ -13,7 +14,8 @@ import type { ForecastReasoning } from '@/lib/types/database'
 
 export interface UsageObservation {
   date: DateOnly
-  bags: number
+  /** Volume used that day, in ml. */
+  ml: number
 }
 
 export interface ForecastInput {
@@ -21,10 +23,10 @@ export interface ForecastInput {
   sauceName: string
   /** Usage rows inside the rolling window. Missing days count as zero. */
   usage: UsageObservation[]
-  /** Sealed + opened bags not yet used or discarded. */
-  usableStock: number
-  /** Manager-configured target stock. Acts as a floor when set. */
-  parLevel: number
+  /** Sealed + opened stock not yet used or discarded, in ml. */
+  usableStockMl: number
+  /** Manager-configured target stock, in ml. Acts as a floor when set. */
+  parLevelMl: number
   /** When the sauce was added — a new sauce isn't averaged over a full window. */
   introducedOn: DateOnly
 }
@@ -40,12 +42,16 @@ export interface ForecastOptions {
   windowDays?: number
   /** Safety buffer. Default 1.1 (+10%). */
   bufferMultiplier?: number
+  /** Bag sizes (ml) available for packing. Default 300/500/1000/2000. */
+  bagSizesMl?: number[]
 }
 
 export interface ForecastResult {
   sauceId: string
   sauceName: string
-  suggestedBags: number
+  suggestedMl: number
+  /** The suggested volume packed into the fewest, least-wasteful bags. */
+  pack: PackResult
   /** True when the sauce will run dry before the next restock. */
   lowStock: boolean
   reasoning: ForecastReasoning
@@ -80,13 +86,14 @@ export const SPIKE_THRESHOLD = 1.25
  *
  * The method, in order:
  *   1. Take the rolling window of usage (default 28 days).
- *   2. Average daily burn rate = total bags used ÷ days observed.
+ *   2. Average daily burn rate = total ml used ÷ days observed.
  *   3. Derive a day-of-week multiplier per weekday.
- *   4. Read current usable stock (sealed + opened).
+ *   4. Read current usable stock (sealed + opened), in ml.
  *   5. Work out which days this batch has to cover (3 for Tue, 4 for Fri).
  *   6. Projected need = Σ (burn rate × that day's multiplier).
  *   7. Suggested = ceil((projected need − usable stock) × buffer), floored at
  *      the par level where the manager has set one.
+ *   8. Pack the suggested volume into the fewest, least-wasteful bags.
  *
  * Everything it used is returned in `reasoning` so the UI can show its working.
  */
@@ -97,6 +104,7 @@ export function forecastSauce(input: ForecastInput, options: ForecastOptions): F
     asOf = prepDate,
     windowDays = DEFAULT_WINDOW_DAYS,
     bufferMultiplier = DEFAULT_BUFFER,
+    bagSizesMl = DEFAULT_BAG_SIZES_ML,
   } = options
 
   const notes: string[] = []
@@ -106,7 +114,7 @@ export function forecastSauce(input: ForecastInput, options: ForecastOptions): F
   const inWindow = input.usage.filter(
     (row) => daysBetween(windowStart, row.date) >= 0 && daysBetween(row.date, asOf) >= 0,
   )
-  const totalBagsUsed = inWindow.reduce((sum, row) => sum + row.bags, 0)
+  const totalMlUsed = inWindow.reduce((sum, row) => sum + row.ml, 0)
 
   // --- 2. Observed days ----------------------------------------------------
   // A sauce introduced mid-window is only divided by the days it has existed,
@@ -121,7 +129,7 @@ export function forecastSauce(input: ForecastInput, options: ForecastOptions): F
     )
   }
 
-  const burnRatePerDay = round2(totalBagsUsed / observedDays)
+  const burnRatePerDay = round2(totalMlUsed / observedDays)
 
   // --- 3. Weekday pattern --------------------------------------------------
   const weekdayMultipliers = computeWeekdayMultipliers(inWindow, burnRatePerDay, observedDays)
@@ -139,30 +147,30 @@ export function forecastSauce(input: ForecastInput, options: ForecastOptions): F
     }
   })
 
-  // --- 6. Projected need ---------------------------------------------------
-  const projectedNeed = round2(
+  // --- 6. Projected need -----------------------------------------------------
+  const projectedNeedMl = round2(
     coverageDates.reduce((sum, day) => sum + day.projected, 0),
   )
 
   // --- 7. Suggestion -------------------------------------------------------
-  const hasHistory = totalBagsUsed > 0
+  const hasHistory = totalMlUsed > 0
   let method: ForecastReasoning['method'] = 'history'
   let confidence: ForecastReasoning['confidence'] = 'high'
-  let rawSuggestion: number
+  let rawSuggestionMl: number
 
   if (!hasHistory) {
     // No usage at all in the window — the par level is the only signal we have.
     method = 'par_fallback'
     confidence = 'low'
-    rawSuggestion = Math.max(0, input.parLevel - input.usableStock)
+    rawSuggestionMl = Math.max(0, input.parLevelMl - input.usableStockMl)
     notes.push(
       input.usage.length === 0
         ? 'No usage history yet — suggestion is based on the par level.'
         : 'No usage recorded in the window — suggestion is based on the par level. Low confidence.',
     )
   } else {
-    const deficit = Math.max(0, projectedNeed - input.usableStock)
-    rawSuggestion = deficit * bufferMultiplier
+    const deficit = Math.max(0, projectedNeedMl - input.usableStockMl)
+    rawSuggestionMl = deficit * bufferMultiplier
 
     if (isPartialWindow) {
       method = 'partial_history'
@@ -172,56 +180,62 @@ export function forecastSauce(input: ForecastInput, options: ForecastOptions): F
     }
   }
 
-  let suggestedBags = Math.max(0, Math.ceil(rawSuggestion))
+  let suggestedMl = Math.max(0, Math.ceil(rawSuggestionMl))
 
   // Par level acts as a floor on total stock, not on the batch size: if there
-  // are already 8 bags and par is 10, the floor contributes 2, not 10.
-  const parGap = Math.max(0, input.parLevel - input.usableStock)
-  const parFloorApplied = input.parLevel > 0 && parGap > suggestedBags
+  // is already 8000ml and par is 10000ml, the floor contributes 2000ml, not
+  // 10000ml.
+  const parGapMl = Math.max(0, input.parLevelMl - input.usableStockMl)
+  const parFloorApplied = input.parLevelMl > 0 && parGapMl > suggestedMl
 
   if (parFloorApplied) {
     notes.push(
-      `Raised to the par level: ${input.parLevel} target − ${input.usableStock} in stock = ${parGap} bags.`,
+      `Raised to the par level: ${input.parLevelMl}ml target − ${input.usableStockMl}ml in stock = ${parGapMl}ml.`,
     )
-    suggestedBags = parGap
+    suggestedMl = parGapMl
   }
+
+  // --- 8. Pack into bags -----------------------------------------------------
+  const pack = packVolume(suggestedMl, bagSizesMl)
 
   // --- Low stock flag ------------------------------------------------------
   // Will this sauce run out before the next restock?
   const daysUntilRestock = Math.max(0, daysBetween(asOf, prepDate))
   const lowStock =
-    hasHistory && input.usableStock < burnRatePerDay * daysUntilRestock && daysUntilRestock > 0
+    hasHistory && input.usableStockMl < burnRatePerDay * daysUntilRestock && daysUntilRestock > 0
 
   if (lowStock) {
     notes.push(
-      `Projected to run out before ${prepDate}: ${input.usableStock} bags in stock vs ${round2(
+      `Projected to run out before ${prepDate}: ${input.usableStockMl}ml in stock vs ${round2(
         burnRatePerDay * daysUntilRestock,
-      )} bags of expected demand.`,
+      )}ml of expected demand.`,
     )
   }
 
   return {
     sauceId: input.sauceId,
     sauceName: input.sauceName,
-    suggestedBags,
+    suggestedMl,
+    pack,
     lowStock,
     reasoning: {
       method,
       confidence,
       burnRatePerDay,
       observedDays,
-      totalBagsUsed,
+      totalMlUsed,
       weekdayMultipliers: Object.fromEntries(
         Object.entries(weekdayMultipliers).map(([key, value]) => [key, round2(value)]),
       ),
       coverageDates,
-      projectedNeed,
-      usableStock: input.usableStock,
+      projectedNeedMl,
+      usableStockMl: input.usableStockMl,
       bufferMultiplier,
-      parLevel: input.parLevel,
+      parLevelMl: input.parLevelMl,
       parFloorApplied,
-      rawSuggestion: round2(rawSuggestion),
-      suggestedBags,
+      rawSuggestionMl: round2(rawSuggestionMl),
+      suggestedMl,
+      pack,
       notes,
     },
   }
@@ -265,7 +279,7 @@ export function computeWeekdayMultipliers(
 
   for (const row of usage) {
     const weekday = weekdayOf(row.date)
-    totals[weekday] = (totals[weekday] ?? 0) + row.bags
+    totals[weekday] = (totals[weekday] ?? 0) + row.ml
     observedDates.add(row.date)
   }
 
@@ -334,7 +348,7 @@ export function detectWeekdaySpikes(
 
   if (observedDays < minObservedDays || usage.length === 0) return []
 
-  const total = usage.reduce((sum, row) => sum + row.bags, 0)
+  const total = usage.reduce((sum, row) => sum + row.ml, 0)
   if (total === 0) return []
 
   const burnRate = total / observedDays
@@ -360,15 +374,20 @@ export function explainForecast(result: ForecastResult): string {
   const { reasoning } = result
 
   if (reasoning.method === 'par_fallback') {
-    return `Based on the par level of ${reasoning.parLevel} bags (not enough usage data yet).`
+    return `Based on the par level of ${reasoning.parLevelMl}ml (not enough usage data yet).`
   }
 
   const days = reasoning.coverageDates.length
+  const packSummary = Object.entries(reasoning.pack.counts)
+    .map(([size, count]) => `${count}×${size}ml`)
+    .join(' + ')
+
   return (
-    `${reasoning.burnRatePerDay} bags/day over ${reasoning.observedDays} days ` +
-    `× ${days} day${days === 1 ? '' : 's'} of cover = ${reasoning.projectedNeed} bags needed, ` +
-    `less ${reasoning.usableStock} in stock, ` +
-    `+${Math.round((reasoning.bufferMultiplier - 1) * 100)}% buffer → ${reasoning.suggestedBags} bags.`
+    `${reasoning.burnRatePerDay}ml/day over ${reasoning.observedDays} days ` +
+    `× ${days} day${days === 1 ? '' : 's'} of cover = ${reasoning.projectedNeedMl}ml needed, ` +
+    `less ${reasoning.usableStockMl}ml in stock, ` +
+    `+${Math.round((reasoning.bufferMultiplier - 1) * 100)}% buffer → ${reasoning.suggestedMl}ml` +
+    (packSummary ? ` → ${packSummary}.` : '.')
   )
 }
 

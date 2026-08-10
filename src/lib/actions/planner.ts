@@ -49,25 +49,26 @@ export async function generatePlan(input: {
       prepDate: prepDay.date,
       windowDays: context.settings.forecast_window_days,
       bufferMultiplier: Number(context.settings.forecast_buffer),
+      bagSizesMl: context.settings.bag_sizes_ml,
     })
 
     // Keep existing overrides across a regenerate.
     const { data: existing } = await supabase
       .from('prep_plan_items')
-      .select('sauce_id, override_bags')
+      .select('sauce_id, override_ml')
       .eq('plan_id', plan.id)
-      .returns<Array<{ sauce_id: string; override_bags: number | null }>>()
+      .returns<Array<{ sauce_id: string; override_ml: number | null }>>()
 
     const overrides = new Map(
-      (existing ?? []).map((item) => [item.sauce_id, item.override_bags]),
+      (existing ?? []).map((item) => [item.sauce_id, item.override_ml]),
     )
 
     const { error: itemsError } = await supabase.from('prep_plan_items').upsert(
       forecasts.map((forecast) => ({
         plan_id: plan.id,
         sauce_id: forecast.sauceId,
-        suggested_bags: forecast.suggestedBags,
-        override_bags: overrides.get(forecast.sauceId) ?? null,
+        suggested_ml: forecast.suggestedMl,
+        override_ml: overrides.get(forecast.sauceId) ?? null,
         reasoning: forecast.reasoning,
       })),
       { onConflict: 'plan_id,sauce_id' },
@@ -85,19 +86,19 @@ export async function generatePlan(input: {
 /** Manager override for a single sauce. Pass `null` to fall back to the suggestion. */
 export async function setPlanItemOverride(input: {
   itemId: string
-  overrideBags: number | null
+  overrideMl: number | null
 }): Promise<ActionResult> {
   try {
     await requireManager()
 
-    if (input.overrideBags !== null && (input.overrideBags < 0 || input.overrideBags > 999)) {
-      return fail(new Error('Enter between 0 and 999 bags.'))
+    if (input.overrideMl !== null && (input.overrideMl < 0 || input.overrideMl > 100_000)) {
+      return fail(new Error('Enter between 0 and 100,000 ml.'))
     }
 
     const supabase = createServerSupabase()
     const { error } = await supabase
       .from('prep_plan_items')
-      .update({ override_bags: input.overrideBags })
+      .update({ override_ml: input.overrideMl })
       .eq('id', input.itemId)
     if (error) throw new Error(error.message)
 
@@ -139,7 +140,7 @@ export async function resetPlanOverrides(planId: string): Promise<ActionResult> 
 
     const { error } = await supabase
       .from('prep_plan_items')
-      .update({ override_bags: null })
+      .update({ override_ml: null })
       .eq('plan_id', planId)
     if (error) throw new Error(error.message)
 

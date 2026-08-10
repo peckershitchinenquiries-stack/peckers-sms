@@ -63,19 +63,19 @@ export async function startPrepSession(input: {
     if (plan) {
       const { data: items } = await supabase
         .from('prep_plan_items')
-        .select('sauce_id, suggested_bags, override_bags')
+        .select('sauce_id, suggested_ml, override_ml')
         .eq('plan_id', plan.id)
         .returns<
-          Array<{ sauce_id: string; suggested_bags: number; override_bags: number | null }>
+          Array<{ sauce_id: string; suggested_ml: number; override_ml: number | null }>
         >()
 
       const rows = (items ?? [])
         .map((item) => ({
           session_id: session.id,
           sauce_id: item.sauce_id,
-          planned_bags: item.override_bags ?? item.suggested_bags,
+          planned_ml: item.override_ml ?? item.suggested_ml,
         }))
-        .filter((row) => row.planned_bags > 0)
+        .filter((row) => row.planned_ml > 0)
 
       if (rows.length > 0) {
         const { error: checklistError } = await supabase.from('prep_checklist').insert(rows)
@@ -145,19 +145,19 @@ export async function setChecklistStep(input: {
 /** Adjusts the planned quantity for one sauce mid-session. */
 export async function setChecklistQuantity(input: {
   checklistId: string
-  plannedBags: number
+  plannedMl: number
 }): Promise<ActionResult> {
   try {
     await requireSession()
 
-    if (input.plannedBags < 0 || input.plannedBags > 999) {
-      return fail(new Error('Enter between 0 and 999 bags.'))
+    if (input.plannedMl < 0 || input.plannedMl > 100_000) {
+      return fail(new Error('Enter between 0 and 100,000 ml.'))
     }
 
     const supabase = createServerSupabase()
     const { error } = await supabase
       .from('prep_checklist')
-      .update({ planned_bags: input.plannedBags })
+      .update({ planned_ml: input.plannedMl })
       .eq('id', input.checklistId)
     if (error) throw new Error(error.message)
 
@@ -172,7 +172,7 @@ export async function setChecklistQuantity(input: {
 export async function addChecklistSauce(input: {
   sessionId: string
   sauceId: string
-  plannedBags: number
+  plannedMl: number
 }): Promise<ActionResult> {
   try {
     await requireSession()
@@ -182,7 +182,7 @@ export async function addChecklistSauce(input: {
       {
         session_id: input.sessionId,
         sauce_id: input.sauceId,
-        planned_bags: input.plannedBags,
+        planned_ml: input.plannedMl,
       },
       { onConflict: 'session_id,sauce_id' },
     )

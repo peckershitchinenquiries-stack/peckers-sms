@@ -205,7 +205,7 @@ export function ExpiryTracker({
               cell: (bag) => (
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-ink">{bag.sauceName}</span>
-                  <BagSizeBadge size={bag.bagSize} />
+                  <BagSizeBadge sizeMl={bag.sizeMl} />
                 </div>
               ),
             },

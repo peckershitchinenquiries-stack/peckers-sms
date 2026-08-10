@@ -4,12 +4,13 @@
  * Seeds a Supabase project with everything needed to demo the app immediately:
  *
  *   • 2 sites (Stevenage, Hitchin)
- *   • the 15 house sauces with correct bag sizes
- *   • par levels per sauce per site
+ *   • the 15 house sauces
+ *   • par levels (ml) per sauce per site
  *   • 3 demo accounts (1 manager, 2 kitchen staff) with a password YOU set
- *   • 6 weeks of realistic daily usage, with deliberate weekday spikes so the
- *     forecast engine and pattern detection have something real to chew on
- *   • historical prep sessions + bags, aged and consumed correctly
+ *   • 6 weeks of realistic daily usage (ml), with deliberate weekday spikes so
+ *     the forecast engine and pattern detection have something real to chew on
+ *   • historical prep sessions + bags packed across the 4 bag sizes, aged and
+ *     consumed correctly
  *   • live stock with a mix of sealed, opened and expiring-today bags
  *   • a forecast plan for the upcoming prep day
  *
@@ -32,8 +33,9 @@ import {
   weekdayOf,
   type DateOnly,
 } from '../../src/lib/date'
-import { SAUCE_SEEDS, SITE_SEEDS } from '../../src/lib/constants/catalogue'
+import { BAG_SIZES_ML, SAUCE_SEEDS, SITE_SEEDS } from '../../src/lib/constants/catalogue'
 import { forecastSauce } from '../../src/lib/forecast/engine'
+import { packVolume } from '../../src/lib/forecast/packing'
 
 loadEnv({ path: '.env.local' })
 loadEnv({ path: '.env' })
@@ -77,26 +79,27 @@ const DEMO_USERS = [
 ]
 
 /**
- * Per-sauce demand shape. `base` is bags/day at Stevenage; Hitchin runs a bit
- * quieter. `spikeDay`/`spikeFactor` create the repeating weekday patterns the
- * pattern detector is meant to find.
+ * Per-sauce demand shape. `baseMl` is ml/day at Stevenage (derived from the
+ * client's own 7-day usage figures); Hitchin runs a bit quieter.
+ * `spikeDay`/`spikeFactor` create the repeating weekday patterns the pattern
+ * detector is meant to find.
  */
-const DEMAND_PROFILE: Record<string, { base: number; spikeDay?: number; spikeFactor?: number }> = {
-  buffalo: { base: 2.4, spikeDay: 6, spikeFactor: 1.7 }, // Saturday
-  'butter-me-up': { base: 1.4 },
-  'garlic-aioli': { base: 2.8, spikeDay: 5, spikeFactor: 1.4 }, // Friday
-  'house-mayo': { base: 3.2 },
-  'supercharged-og': { base: 1.8, spikeDay: 6, spikeFactor: 1.5 },
-  'hot-honey': { base: 2.0, spikeDay: 0, spikeFactor: 1.45 }, // Sunday
-  'cheese-sauce': { base: 2.6 },
-  'mango-pineapple': { base: 1.1 },
-  'katsu-curry': { base: 1.6 },
-  'peanut-sweet-chilli': { base: 1.0 },
-  'honey-glaze-bbq': { base: 2.1, spikeDay: 6, spikeFactor: 1.35 },
-  'korean-gochujang': { base: 1.5 },
-  'korean-glaze': { base: 1.4 },
-  'og-chilli': { base: 2.2 },
-  ranch: { base: 3.0, spikeDay: 5, spikeFactor: 1.6 }, // Friday — the headline pattern
+const DEMAND_PROFILE: Record<string, { baseMl: number; spikeDay?: number; spikeFactor?: number }> = {
+  buffalo: { baseMl: 2900, spikeDay: 5, spikeFactor: 1.4 }, // Friday–Sunday run hot
+  'butter-me-up': { baseMl: 2900, spikeDay: 5, spikeFactor: 1.4 },
+  'garlic-aioli': { baseMl: 2300, spikeDay: 5, spikeFactor: 1.7 }, // Friday
+  'house-mayo': { baseMl: 3400, spikeDay: 5, spikeFactor: 1.2 },
+  'supercharged-og': { baseMl: 2000 },
+  'hot-honey': { baseMl: 1650, spikeDay: 1, spikeFactor: 1.2 },
+  'cheese-sauce': { baseMl: 1300, spikeDay: 5, spikeFactor: 1.5 },
+  'mango-pineapple': { baseMl: 2000 },
+  'katsu-curry': { baseMl: 1650, spikeDay: 3, spikeFactor: 1.2 },
+  'peanut-sweet-chilli': { baseMl: 1200, spikeDay: 5, spikeFactor: 1.7 },
+  'honey-glaze-bbq': { baseMl: 2000, spikeDay: 5, spikeFactor: 1.5 },
+  'korean-gochujang': { baseMl: 470, spikeDay: 5, spikeFactor: 1.3 },
+  'korean-glaze': { baseMl: 850, spikeDay: 5, spikeFactor: 1.75 },
+  'og-chilli': { baseMl: 570 },
+  ranch: { baseMl: 700, spikeDay: 5, spikeFactor: 1.4 },
 }
 
 /** Mango Pineapple is seeded as a recent addition to exercise the new-sauce path. */
@@ -210,14 +213,13 @@ async function main(): Promise<void> {
       SAUCE_SEEDS.map((sauce, index) => ({
         name: sauce.name,
         slug: sauce.slug,
-        bag_size: sauce.bagSize,
         sort_order: index,
         active: true,
         introduced_on: addDaysTo(asOf, -(RECENTLY_INTRODUCED[sauce.slug] ?? 400)),
       })),
       { onConflict: 'slug' },
     )
-    .select('id, name, slug, bag_size, introduced_on')
+    .select('id, name, slug, introduced_on')
   if (sauceError) throw new Error(`Sauces: ${sauceError.message}`)
   console.log(`  · ${sauces!.length} sauces`)
 
@@ -229,9 +231,9 @@ async function main(): Promise<void> {
       sauce_id: sauceBySlug.get(sauce.slug)!.id,
       site_id: siteBySlug.get(site.slug)!.id,
       // Hitchin is the quieter kitchen, so its targets are proportionally lower.
-      target_bags: Math.max(
-        2,
-        Math.round(sauce.defaultPar * (SITE_DEMAND_FACTOR[site.slug] ?? 1)),
+      target_ml: Math.max(
+        200,
+        Math.round(sauce.defaultParMl * (SITE_DEMAND_FACTOR[site.slug] ?? 1)),
       ),
     })),
   )
@@ -294,7 +296,7 @@ async function main(): Promise<void> {
   const allDates = dateRange(historyStart, addDaysTo(asOf, -1))
 
   const usageRows: Record<string, unknown>[] = []
-  /** site -> sauce -> date -> bags, reused when ageing the bag inventory. */
+  /** site -> sauce -> date -> ml, reused when ageing the bag inventory. */
   const usageIndex = new Map<string, Map<string, Map<DateOnly, number>>>()
 
   for (const site of SITE_SEEDS) {
@@ -304,7 +306,7 @@ async function main(): Promise<void> {
 
     for (const sauce of SAUCE_SEEDS) {
       const sauceId = sauceBySlug.get(sauce.slug)!.id
-      const profile = DEMAND_PROFILE[sauce.slug] ?? { base: 1.5 }
+      const profile = DEMAND_PROFILE[sauce.slug] ?? { baseMl: 1500 }
       const introducedDaysAgo = RECENTLY_INTRODUCED[sauce.slug]
       const byDate = new Map<DateOnly, number>()
 
@@ -322,18 +324,17 @@ async function main(): Promise<void> {
         const weekendLift = weekday === 0 || weekday === 6 ? 1.25 : 1
         const noise = 0.78 + rng() * 0.44
 
-        const bags = Math.max(
-          0,
-          Math.round(profile.base * siteFactor * spike * weekendLift * noise),
-        )
-        if (bags === 0) continue
+        const rawMl = profile.baseMl * siteFactor * spike * weekendLift * noise
+        // Round to the nearest 50ml — kitchens think in round numbers.
+        const ml = Math.max(0, Math.round(rawMl / 50) * 50)
+        if (ml === 0) continue
 
-        byDate.set(date, bags)
+        byDate.set(date, ml)
         usageRows.push({
           site_id: siteId,
           sauce_id: sauceId,
           usage_date: date,
-          bags_opened: bags,
+          ml_used: ml,
           logged_by: profileByEmail.get(site.slug === 'hitchin' ? 'hitchin@peckers.dev' : 'staff@peckers.dev')!.id,
         })
       }
@@ -386,25 +387,34 @@ async function main(): Promise<void> {
         const sauceId = sauceBySlug.get(sauce.slug)!.id
         const byDate = usageIndex.get(site.slug)!.get(sauce.slug)!
 
-        // Make roughly what the following days actually consumed, ±1 bag —
+        // Make roughly what the following days actually consumed, ±300ml —
         // that's what a kitchen working from memory looks like.
-        const consumed = Array.from({ length: coversDays }, (_, offset) =>
+        const consumedMl = Array.from({ length: coversDays }, (_, offset) =>
           byDate.get(addDaysTo(prepDate, offset)) ?? 0,
         ).reduce((sum, value) => sum + value, 0)
 
-        const made = Math.max(0, consumed + Math.round(rng() * 3) - 1)
-        if (made === 0) continue
+        const madeMl = Math.max(0, consumedMl + Math.round((rng() * 3 - 1) * 300))
+        if (madeMl === 0) continue
+
+        // Pack the volume into the least-wasteful mix of bag sizes, exactly
+        // as the real prep checklist would.
+        const pack = packVolume(madeMl, BAG_SIZES_ML)
+        const sizesFlat = Object.entries(pack.counts).flatMap(([size, count]) =>
+          Array<number>(count).fill(Number(size)),
+        )
+        if (sizesFlat.length === 0) continue
 
         checklistRows.push({
           session_id: session!.id,
           sauce_id: sauceId,
-          planned_bags: made,
+          planned_ml: madeMl,
           cooked_at: atLocalTime(prepDate, '07:30:00'),
           blast_chilled_at: atLocalTime(prepDate, '08:15:00'),
           vacuum_packed_at: atLocalTime(prepDate, '09:45:00'),
         })
 
         const daysOld = dateDiff(prepDate, asOf)
+        const made = sizesFlat.length
 
         for (let index = 0; index < made; index += 1) {
           // Bags older than their 5-day sealed life are already resolved.
@@ -425,7 +435,7 @@ async function main(): Promise<void> {
             sauce_id: sauceId,
             site_id: siteId,
             prep_session_id: session!.id,
-            bag_size: sauce.bagSize,
+            size_ml: sizesFlat[index],
             prep_date: prepDate,
             sealed_expiry: addDaysTo(prepDate, 5),
             status,
@@ -482,9 +492,9 @@ async function main(): Promise<void> {
         {
           sauceId: row.sauce_id,
           sauceName: row.sauce_name,
-          usage: (row.usage ?? []).map((entry) => ({ date: entry.date, bags: entry.bags })),
-          usableStock: Number(row.usable_bags),
-          parLevel: row.par_level,
+          usage: (row.usage ?? []).map((entry) => ({ date: entry.date, ml: entry.ml })),
+          usableStockMl: Number(row.usable_ml),
+          parLevelMl: row.par_level_ml,
           introducedOn: row.introduced_on,
         },
         {
@@ -493,13 +503,14 @@ async function main(): Promise<void> {
           asOf,
           windowDays: 28,
           bufferMultiplier: 1.1,
+          bagSizesMl: BAG_SIZES_ML,
         },
       )
 
       return {
         plan_id: plan!.id,
         sauce_id: row.sauce_id,
-        suggested_bags: result.suggestedBags,
+        suggested_ml: result.suggestedMl,
         reasoning: result.reasoning,
       }
     })
@@ -521,11 +532,10 @@ async function main(): Promise<void> {
 interface ForecastInputRow {
   sauce_id: string
   sauce_name: string
-  bag_size: string
   introduced_on: string
-  par_level: number
-  usable_bags: number
-  usage: Array<{ date: string; bags: number }> | null
+  par_level_ml: number
+  usable_ml: number
+  usage: Array<{ date: string; ml: number }> | null
 }
 
 /** Calendar days between two DateOnly values, as a number. */

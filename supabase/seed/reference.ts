@@ -3,8 +3,8 @@
  *
  * Populates only the catalogue every environment needs to function:
  *   • 2 sites (Stevenage, Hitchin)
- *   • the 15 house sauces with correct bag sizes
- *   • starting par levels per sauce per site
+ *   • the 15 house sauces
+ *   • starting par levels (ml) per sauce per site
  *
  * Creates no user accounts and no fake history. Idempotent — upserts on
  * slug, so running it again just syncs the catalogue.
@@ -60,7 +60,6 @@ async function main(): Promise<void> {
       SAUCE_SEEDS.map((sauce, index) => ({
         name: sauce.name,
         slug: sauce.slug,
-        bag_size: sauce.bagSize,
         sort_order: index,
         active: true,
         // Genuinely new today — there is no usage history to backdate.
@@ -78,9 +77,9 @@ async function main(): Promise<void> {
     SITE_SEEDS.map((site) => ({
       sauce_id: sauceBySlug.get(sauce.slug)!.id,
       site_id: siteBySlug.get(site.slug)!.id,
-      target_bags: Math.max(
-        2,
-        Math.round(sauce.defaultPar * (SITE_DEMAND_FACTOR[site.slug] ?? 1)),
+      target_ml: Math.max(
+        200,
+        Math.round(sauce.defaultParMl * (SITE_DEMAND_FACTOR[site.slug] ?? 1)),
       ),
     })),
   )

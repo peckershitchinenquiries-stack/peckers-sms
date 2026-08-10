@@ -25,6 +25,7 @@ import {
   StatCard,
 } from '@/components/ui'
 import { BagSizeBadge, ExpiryBadge } from '@/components/app/StatusPills'
+import { formatMl } from '@/lib/utils/volume'
 
 export const metadata: Metadata = { title: 'Today' }
 
@@ -55,14 +56,14 @@ export default async function TodayPage() {
     getTrackedBags({ siteId }),
     getLiveStock(siteId),
     isPrepToday ? getSessionForDate(siteId, asOf) : Promise.resolve(null),
-    getPlan(siteId, prepDay.date),
+    getPlan(siteId, prepDay.date, context.settings.bag_sizes_ml),
     getUsageForDate(siteId, asOf),
   ])
 
   const expiry = summariseExpiry(bags)
   const useToday = bags.filter((bag) => bag.daysRemaining <= 2)
-  const loggedBags = Array.from(loggedToday.values()).reduce((sum, value) => sum + value, 0)
-  const belowPar = stock.filter((row) => row.par_level > 0 && row.usable_bags < row.par_level)
+  const loggedMl = Array.from(loggedToday.values()).reduce((sum, value) => sum + value, 0)
+  const belowPar = stock.filter((row) => row.par_level_ml > 0 && row.usable_ml < row.par_level_ml)
 
   const packed = session?.entries.filter((entry) => entry.vacuum_packed_at).length ?? 0
   const totalOnChecklist = session?.entries.length ?? 0
@@ -109,7 +110,7 @@ export default async function TodayPage() {
           className="mb-6"
         >
           {!session
-            ? `Today's batch needs to cover ${prepDay.coversDays} days${plan ? ` — ${plan.totalBags} bags planned.` : '.'} Start the session to clock in and load the checklist.`
+            ? `Today's batch needs to cover ${prepDay.coversDays} days${plan ? ` — ${formatMl(plan.totalMl)} planned.` : '.'} Start the session to clock in and load the checklist.`
             : packed === totalOnChecklist && totalOnChecklist > 0
               ? 'Everything on the checklist has been cooked, chilled and packed. Remember to finish the session so your hours are recorded.'
               : 'Work down the checklist: cook, blast chill for 1.5 hours, then vacuum pack.'}
@@ -135,8 +136,7 @@ export default async function TodayPage() {
         />
         <StatCard
           label="Logged today"
-          value={loggedBags}
-          unit="bags"
+          value={formatMl(loggedMl)}
           icon="clipboard-list"
           tone="brand"
           hint={`${loggedToday.size} sauce${loggedToday.size === 1 ? '' : 's'}`}
@@ -192,7 +192,7 @@ export default async function TodayPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="truncate text-base font-medium text-ink">{bag.sauceName}</p>
-                      <BagSizeBadge size={bag.bagSize} />
+                      <BagSizeBadge sizeMl={bag.sizeMl} />
                     </div>
                     <p className="mt-1 text-xs text-ink-muted">
                       {bag.status === 'opened'
@@ -234,20 +234,20 @@ export default async function TodayPage() {
           ) : (
             <ul className="space-y-3.5">
               {belowPar
-                .sort((a, b) => a.usable_bags / a.par_level - b.usable_bags / b.par_level)
+                .sort((a, b) => a.usable_ml / a.par_level_ml - b.usable_ml / b.par_level_ml)
                 .slice(0, 8)
                 .map((row) => (
                   <li key={`${row.sauce_id}:${row.site_id}`}>
                     <ProgressBar
                       size="sm"
                       label={row.sauce_name}
-                      valueLabel={`${row.usable_bags} / ${row.par_level}`}
-                      value={row.usable_bags}
-                      max={row.par_level}
+                      valueLabel={`${formatMl(row.usable_ml)} / ${formatMl(row.par_level_ml)}`}
+                      value={row.usable_ml}
+                      max={row.par_level_ml}
                       tone={
-                        row.usable_bags === 0
+                        row.usable_ml === 0
                           ? 'danger'
-                          : row.usable_bags < row.par_level * 0.5
+                          : row.usable_ml < row.par_level_ml * 0.5
                             ? 'warning'
                             : 'success'
                       }
@@ -267,7 +267,7 @@ export default async function TodayPage() {
           <CardHeader
             eyebrow={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} · ${prepDay.coversDays}-day cover`}
             title={`Coming up: prep on ${formatShort(prepDay.date)}`}
-            description={`${plan.totalBags} bags planned across ${plan.items.filter((item) => item.finalBags > 0).length} sauces. Prep runs 7–11am.`}
+            description={`${formatMl(plan.totalMl)} planned across ${plan.items.filter((item) => item.finalMl > 0).length} sauces. Prep runs 7–11am.`}
             actions={
               <LinkButton href="/prep" variant="secondary" size="sm" trailingIcon="arrow-right">
                 See the checklist
@@ -276,7 +276,7 @@ export default async function TodayPage() {
           />
           <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {plan.items
-              .filter((item) => item.finalBags > 0)
+              .filter((item) => item.finalMl > 0)
               .slice(0, 9)
               .map((item) => (
                 <li
@@ -285,7 +285,7 @@ export default async function TodayPage() {
                 >
                   <span className="truncate text-sm font-medium text-ink">{item.sauceName}</span>
                   <Badge tone="neutral" size="sm">
-                    {item.finalBags}
+                    {formatMl(item.finalMl)}
                   </Badge>
                 </li>
               ))}

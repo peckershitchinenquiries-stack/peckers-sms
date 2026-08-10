@@ -21,7 +21,6 @@ function slugify(value: string): string {
 export async function upsertSauce(input: {
   id?: string
   name: string
-  bagSize: '1L' | '2L'
   active?: boolean
 }): Promise<ActionResult<{ id: string }>> {
   try {
@@ -35,7 +34,7 @@ export async function upsertSauce(input: {
     if (input.id) {
       const { error } = await supabase
         .from('sauces')
-        .update({ name, bag_size: input.bagSize, active: input.active ?? true })
+        .update({ name, active: input.active ?? true })
         .eq('id', input.id)
       if (error) throw new Error(error.message)
 
@@ -50,7 +49,6 @@ export async function upsertSauce(input: {
       .insert({
         name,
         slug: slugify(name),
-        bag_size: input.bagSize,
         active: true,
         introduced_on: today(),
       })
@@ -66,7 +64,7 @@ export async function upsertSauce(input: {
     const { data: sites } = await supabase.from('sites').select('id').returns<Array<{ id: string }>>()
     if (sites?.length) {
       await supabase.from('par_levels').upsert(
-        sites.map((site) => ({ sauce_id: data.id, site_id: site.id, target_bags: 0 })),
+        sites.map((site) => ({ sauce_id: data.id, site_id: site.id, target_ml: 0 })),
         { onConflict: 'sauce_id,site_id' },
       )
     }
@@ -109,18 +107,18 @@ export async function setSauceActive(input: {
 export async function setParLevel(input: {
   sauceId: string
   siteId: string
-  targetBags: number
+  targetMl: number
 }): Promise<ActionResult> {
   try {
     await requireManager()
 
-    if (!Number.isInteger(input.targetBags) || input.targetBags < 0 || input.targetBags > 999) {
-      return fail(new Error('Par level must be between 0 and 999 bags.'))
+    if (!Number.isInteger(input.targetMl) || input.targetMl < 0 || input.targetMl > 100_000) {
+      return fail(new Error('Par level must be between 0 and 100,000 ml.'))
     }
 
     const supabase = createServerSupabase()
     const { error } = await supabase.from('par_levels').upsert(
-      { sauce_id: input.sauceId, site_id: input.siteId, target_bags: input.targetBags },
+      { sauce_id: input.sauceId, site_id: input.siteId, target_ml: input.targetMl },
       { onConflict: 'sauce_id,site_id' },
     )
     if (error) throw new Error(error.message)
@@ -269,6 +267,7 @@ export async function updateAppSettings(input: {
   lowStockAlertsEnabled?: boolean
   forecastBuffer?: number
   forecastWindowDays?: number
+  bagSizesMl?: number[]
 }): Promise<ActionResult> {
   try {
     await requireManager()
@@ -302,6 +301,16 @@ export async function updateAppSettings(input: {
         return fail(new Error('Window must be between 7 and 90 days.'))
       }
       patch.forecast_window_days = input.forecastWindowDays
+    }
+    if (input.bagSizesMl !== undefined) {
+      const sizes = [...new Set(input.bagSizesMl)].sort((a, b) => a - b)
+      const valid =
+        sizes.length > 0 &&
+        sizes.every((size) => Number.isInteger(size) && size > 0 && size % 100 === 0)
+      if (!valid) {
+        return fail(new Error('Bag sizes must be positive, whole multiples of 100ml.'))
+      }
+      patch.bag_sizes_ml = sizes
     }
 
     const supabase = createServerSupabase()

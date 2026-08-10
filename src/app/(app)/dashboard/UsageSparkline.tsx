@@ -5,16 +5,17 @@ import { motion } from 'framer-motion'
 import { Tooltip } from '@/components/ui'
 import { motion as motionTokens } from '@/lib/design/tokens'
 import { WEEKDAY_SHORT, formatShort, isPrepDay, today, weekdayOf, type DateOnly } from '@/lib/date'
+import { formatMl } from '@/lib/utils/volume'
 
 /**
- * Bar chart of bags opened per day. Prep days are marked so the sawtooth of
+ * Bar chart of volume used per day. Prep days are marked so the sawtooth of
  * "restock then burn down" is readable at a glance.
  */
-export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; bags: number }> }) {
+export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; ml: number }> }) {
   const asOf = today()
-  const peak = Math.max(...data.map((day) => day.bags), 1)
+  const peak = Math.max(...data.map((day) => day.ml), 1)
   const average = data.length
-    ? Math.round((data.reduce((sum, day) => sum + day.bags, 0) / data.length) * 10) / 10
+    ? Math.round(data.reduce((sum, day) => sum + day.ml, 0) / data.length)
     : 0
 
   return (
@@ -27,7 +28,7 @@ export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; bags: n
           style={{ bottom: `${(average / peak) * 100}%` }}
         >
           <span className="absolute -top-4 right-0 text-2xs text-ink-subtle">
-            avg {average}
+            avg {formatMl(average)}
           </span>
         </div>
 
@@ -40,14 +41,14 @@ export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; bags: n
               <Tooltip
                 content={
                   <>
-                    <strong>{day.bags} bags</strong> on {formatShort(day.date)}
+                    <strong>{formatMl(day.ml)}</strong> on {formatShort(day.date)}
                     {prep ? ' · prep day' : ''}
                   </>
                 }
               >
                 <motion.div
                   initial={{ height: 0 }}
-                  animate={{ height: `${Math.max((day.bags / peak) * 100, 2)}%` }}
+                  animate={{ height: `${Math.max((day.ml / peak) * 100, 2)}%` }}
                   transition={{
                     delay: index * 0.02,
                     duration: motionTokens.duration.slower,

@@ -21,7 +21,6 @@ import {
   Tooltip,
   useToast,
 } from '@/components/ui'
-import { BagSizeBadge } from '@/components/app/StatusPills'
 import {
   createStaffAccount,
   resetStaffPassword,
@@ -32,6 +31,7 @@ import {
   upsertSauce,
 } from '@/lib/actions/settings'
 import { APP_TIMEZONE, formatDateOnly } from '@/lib/date'
+import { formatMl } from '@/lib/utils/volume'
 import type { AppSettings, ParLevel, Profile, Sauce, Site } from '@/lib/types/database'
 
 type Tab = 'sauces' | 'pars' | 'staff' | 'app'
@@ -91,18 +91,15 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
   const [editing, setEditing] = React.useState<Sauce | null>(null)
   const [creating, setCreating] = React.useState(false)
   const [deactivating, setDeactivating] = React.useState<Sauce | null>(null)
-  const [form, setForm] = React.useState<{ name: string; bagSize: '1L' | '2L' }>({
-    name: '',
-    bagSize: '1L',
-  })
+  const [form, setForm] = React.useState<{ name: string }>({ name: '' })
 
   const openCreate = () => {
-    setForm({ name: '', bagSize: '1L' })
+    setForm({ name: '' })
     setCreating(true)
   }
 
   const openEdit = (sauce: Sauce) => {
-    setForm({ name: sauce.name, bagSize: sauce.bag_size })
+    setForm({ name: sauce.name })
     setEditing(sauce)
   }
 
@@ -111,7 +108,6 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
       const result = await upsertSauce({
         id: editing?.id,
         name: form.name,
-        bagSize: form.bagSize,
         active: editing?.active ?? true,
       })
       if (!result.ok) {
@@ -139,7 +135,7 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
             className="mb-0"
             eyebrow={`${sauces.filter((sauce) => sauce.active).length} active`}
             title="House sauces"
-            description="Bag size is fixed per recipe. Deactivate rather than delete — historical batches must stay readable."
+            description="Every batch is packed into whichever mix of bag sizes wastes the least. Deactivate rather than delete — historical batches must stay readable."
             actions={
               <Button leadingIcon="plus" size="md" onClick={openCreate}>
                 Add sauce
@@ -165,12 +161,9 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
               key: 'name',
               header: 'Sauce',
               cell: (sauce) => (
-                <div className="flex items-center gap-2">
-                  <span className={sauce.active ? 'font-medium text-ink' : 'text-ink-muted line-through'}>
-                    {sauce.name}
-                  </span>
-                  <BagSizeBadge size={sauce.bag_size} />
-                </div>
+                <span className={sauce.active ? 'font-medium text-ink' : 'text-ink-muted line-through'}>
+                  {sauce.name}
+                </span>
               ),
             },
             {
@@ -253,7 +246,7 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
         title={editing ? `Edit ${editing.name}` : 'Add a sauce'}
         description={
           editing
-            ? 'Changing the bag size only affects bags made from now on.'
+            ? undefined
             : 'The sauce is created at both sites with a par level of 0 — set it on the Par levels tab.'
         }
         size="sm"
@@ -281,17 +274,6 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
             value={form.name}
             onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
             placeholder="e.g. Smoked Chipotle"
-          />
-          <RadioGroup
-            label="Bag size"
-            variant="card"
-            columns={2}
-            value={form.bagSize}
-            onChange={(bagSize) => setForm((current) => ({ ...current, bagSize }))}
-            options={[
-              { value: '2L', label: '2 litre', description: 'Buffalo, Mayo, Aioli…' },
-              { value: '1L', label: '1 litre', description: 'Ranch, Katsu, Hot Honey…' },
-            ]}
           />
         </div>
       </Modal>
@@ -340,7 +322,7 @@ function ParsTab({
   const [drafts, setDrafts] = React.useState<Record<string, number>>({})
 
   const lookup = React.useMemo(
-    () => new Map(parLevels.map((par) => [`${par.sauce_id}:${par.site_id}`, par.target_bags])),
+    () => new Map(parLevels.map((par) => [`${par.sauce_id}:${par.site_id}`, par.target_ml])),
     [parLevels],
   )
 
@@ -351,7 +333,7 @@ function ParsTab({
     setDrafts((current) => ({ ...current, [key]: value }))
 
     startTransition(async () => {
-      const result = await setParLevel({ sauceId, siteId, targetBags: value })
+      const result = await setParLevel({ sauceId, siteId, targetMl: value })
       if (!result.ok) {
         toast({ tone: 'danger', title: 'Could not save par level', description: result.error })
       }
@@ -386,12 +368,7 @@ function ParsTab({
             {
               key: 'sauce',
               header: 'Sauce',
-              cell: (sauce) => (
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-ink">{sauce.name}</span>
-                  <BagSizeBadge size={sauce.bag_size} />
-                </div>
-              ),
+              cell: (sauce) => <span className="font-medium text-ink">{sauce.name}</span>,
             },
             ...sites.map((site) => ({
               key: site.id,
@@ -412,7 +389,9 @@ function ParsTab({
                       size="sm"
                       value={value}
                       min={0}
-                      max={999}
+                      max={20_000}
+                      step={100}
+                      unit="ml"
                       onChange={(next) => save(sauce.id, site.id, next)}
                     />
                   </div>
@@ -745,7 +724,15 @@ function AppTab({ settings }: { settings: AppSettings }) {
     lowStockAlertsEnabled: settings.low_stock_alerts_enabled,
     forecastBuffer: Math.round(Number(settings.forecast_buffer) * 100),
     forecastWindowDays: settings.forecast_window_days,
+    bagSizes: settings.bag_sizes_ml.join(', '),
   })
+
+  const parsedBagSizes = form.bagSizes
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0)
+  const bagSizesValid =
+    parsedBagSizes.length > 0 && parsedBagSizes.every((size) => size % 100 === 0)
 
   const save = () => {
     startTransition(async () => {
@@ -759,6 +746,7 @@ function AppTab({ settings }: { settings: AppSettings }) {
         lowStockAlertsEnabled: form.lowStockAlertsEnabled,
         forecastBuffer: form.forecastBuffer / 100,
         forecastWindowDays: form.forecastWindowDays,
+        bagSizesMl: bagSizesValid ? parsedBagSizes : undefined,
       })
 
       if (result.ok) {
@@ -802,6 +790,26 @@ function AppTab({ settings }: { settings: AppSettings }) {
             hint="Applied on top of projected need. 110% means +10% headroom — higher reduces stock-outs but increases waste."
           />
         </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          eyebrow="Packing"
+          title="Available bag sizes"
+          description="Every batch is packed into whichever mix of these sizes wastes the least volume."
+        />
+        <Input
+          label="Sizes (ml)"
+          value={form.bagSizes}
+          onChange={(event) => setForm((current) => ({ ...current, bagSizes: event.target.value }))}
+          placeholder="300, 500, 1000, 2000"
+          error={!bagSizesValid ? 'Enter at least one positive, whole multiple of 100ml, comma separated.' : undefined}
+          hint={
+            bagSizesValid
+              ? `Preview: ${parsedBagSizes.map((size) => formatMl(size)).join(' · ')}`
+              : 'Comma separated, e.g. 300, 500, 1000, 2000.'
+          }
+        />
       </Card>
 
       <Card>
@@ -884,7 +892,7 @@ function AppTab({ settings }: { settings: AppSettings }) {
       </Card>
 
       <div className="lg:col-span-2">
-        <Button size="lg" leadingIcon="check" loading={busy} onClick={save}>
+        <Button size="lg" leadingIcon="check" loading={busy} disabled={!bagSizesValid} onClick={save}>
           Save settings
         </Button>
       </div>

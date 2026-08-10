@@ -99,8 +99,8 @@ export async function POST(request: NextRequest) {
         .filter((draft) => draft.type === 'low_stock' && draft.siteId === site.id)
         .map((draft) => ({
           sauceName: String(draft.title).replace(/ will run out.*$/, ''),
-          usableBags: Number(draft.metadata.usableBags ?? 0),
-          burnRate: Number(draft.metadata.burnRate ?? 0),
+          usableMl: Number(draft.metadata.usableMl ?? 0),
+          burnRateMl: Number(draft.metadata.burnRateMl ?? 0),
         }))
 
       sections.push({

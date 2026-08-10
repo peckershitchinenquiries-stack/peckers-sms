@@ -6,28 +6,51 @@ import { requireSession, requireWriteSite } from '@/lib/auth'
 import { type DateOnly, sealedExpiryFor, today } from '@/lib/date'
 import { fail, ok, type ActionResult } from './types'
 
+/** Validates a `{ sizeMl: count }` pack and returns its totals. */
+function validatePack(pack: Record<number, number>): { totalBags: number; totalMl: number } {
+  let totalBags = 0
+  let totalMl = 0
+
+  for (const [sizeKey, count] of Object.entries(pack)) {
+    const size = Number(sizeKey)
+    if (count === 0) continue
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error('Bag counts must be whole numbers, zero or more.')
+    }
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new Error(`Unsupported bag size: ${sizeKey}.`)
+    }
+    totalBags += count
+    totalMl += size * count
+  }
+
+  if (totalBags < 1 || totalBags > 500) {
+    throw new Error('Enter between 1 and 500 bags in total.')
+  }
+
+  return { totalBags, totalMl }
+}
+
 /**
  * Logs the bags actually produced for one sauce and creates one bag record per
  * physical bag, each with its own 5-day sealed expiry.
  *
- * Quantities are recorded as *additional* bags, so logging 6 then 4 gives 10 —
- * staff often pack in waves.
+ * `pack` is a `{ sizeMl: count }` breakdown — e.g. `{ 2000: 2, 500: 1 }` for
+ * 2×2000ml + 1×500ml. Quantities are recorded as *additional* bags, so
+ * logging then logging again adds to the total — staff often pack in waves.
  */
 export async function logBatch(input: {
   sauceId: string
   siteId?: string
   sessionId?: string | null
   prepDate?: DateOnly
-  quantity: number
-}): Promise<ActionResult<{ created: number; sealedExpiry: DateOnly }>> {
+  pack: Record<number, number>
+}): Promise<ActionResult<{ created: number; createdMl: number; sealedExpiry: DateOnly }>> {
   try {
     const context = await requireSession()
     const siteId = requireWriteSite(context, input.siteId ?? context.profile.site_id)
     const prepDate = input.prepDate ?? today()
-
-    if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 500) {
-      return fail(new Error('Enter between 1 and 500 bags.'))
-    }
+    const { totalBags, totalMl } = validatePack(input.pack)
 
     const supabase = createServerSupabase()
     const { error } = await supabase.rpc('create_batch_bags', {
@@ -35,7 +58,7 @@ export async function logBatch(input: {
       p_sauce_id: input.sauceId,
       p_session_id: input.sessionId ?? null,
       p_prep_date: prepDate,
-      p_quantity: input.quantity,
+      p_pack: input.pack,
     })
     if (error) throw new Error(error.message)
 
@@ -45,7 +68,7 @@ export async function logBatch(input: {
     revalidatePath('/dashboard')
     revalidatePath('/today')
 
-    return ok({ created: input.quantity, sealedExpiry: sealedExpiryFor(prepDate) })
+    return ok({ created: totalBags, createdMl: totalMl, sealedExpiry: sealedExpiryFor(prepDate) })
   } catch (error) {
     return fail(error, 'Could not log the batch.')
   }
@@ -53,7 +76,7 @@ export async function logBatch(input: {
 
 /**
  * Completes the vacuum-pack step and creates the bags in one go — the action
- * behind the big "Pack N bags" button on the prep checklist.
+ * behind the big "Pack" button on the prep checklist.
  */
 export async function completeVacuumPack(input: {
   checklistId: string
@@ -61,11 +84,12 @@ export async function completeVacuumPack(input: {
   sauceId: string
   siteId: string
   prepDate: DateOnly
-  quantity: number
-}): Promise<ActionResult<{ created: number }>> {
+  pack: Record<number, number>
+}): Promise<ActionResult<{ created: number; createdMl: number }>> {
   try {
     const context = await requireSession()
     const siteId = requireWriteSite(context, input.siteId)
+    const { totalBags, totalMl } = validatePack(input.pack)
     const supabase = createServerSupabase()
 
     const { error: rpcError } = await supabase.rpc('create_batch_bags', {
@@ -73,20 +97,20 @@ export async function completeVacuumPack(input: {
       p_sauce_id: input.sauceId,
       p_session_id: input.sessionId,
       p_prep_date: input.prepDate,
-      p_quantity: input.quantity,
+      p_pack: input.pack,
     })
     if (rpcError) throw new Error(rpcError.message)
 
     const { error: stepError } = await supabase
       .from('prep_checklist')
-      .update({ vacuum_packed_at: new Date().toISOString(), planned_bags: input.quantity })
+      .update({ vacuum_packed_at: new Date().toISOString(), planned_ml: totalMl })
       .eq('id', input.checklistId)
     if (stepError) throw new Error(stepError.message)
 
     revalidatePath('/prep')
     revalidatePath('/batches')
     revalidatePath('/expiry')
-    return ok({ created: input.quantity })
+    return ok({ created: totalBags, createdMl: totalMl })
   } catch (error) {
     return fail(error, 'Could not record the vacuum pack.')
   }

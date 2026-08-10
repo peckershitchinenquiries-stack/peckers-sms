@@ -3,6 +3,7 @@ import 'server-only'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { type DateOnly, today, upcomingPrepDay } from '@/lib/date'
 import { forecastSauce, type ForecastResult } from '@/lib/forecast/engine'
+import { DEFAULT_BAG_SIZES_ML, packVolume, type PackResult } from '@/lib/forecast/packing'
 import type {
   ForecastInputRow,
   ForecastReasoning,
@@ -18,9 +19,8 @@ import type {
 /* -------------------------------------------------------------------------- */
 
 export interface SauceForecast extends ForecastResult {
-  bagSize: '1L' | '2L'
-  parLevel: number
-  usableStock: number
+  parLevelMl: number
+  usableStockMl: number
   sealedBags: number
   openedBags: number
 }
@@ -37,6 +37,7 @@ export async function buildForecast(options: {
   prepDate?: DateOnly
   windowDays?: number
   bufferMultiplier?: number
+  bagSizesMl?: number[]
   asOf?: DateOnly
 }): Promise<{ prepDate: DateOnly; coversDays: 3 | 4; forecasts: SauceForecast[] }> {
   const asOf = options.asOf ?? today()
@@ -46,6 +47,7 @@ export async function buildForecast(options: {
 
   const supabase = createServerSupabase()
   const windowDays = options.windowDays ?? 28
+  const bagSizesMl = options.bagSizesMl ?? DEFAULT_BAG_SIZES_ML
 
   const { data, error } = await supabase.rpc('forecast_inputs', {
     p_site_id: options.siteId,
@@ -61,9 +63,9 @@ export async function buildForecast(options: {
       {
         sauceId: row.sauce_id,
         sauceName: row.sauce_name,
-        usage: (row.usage ?? []).map((entry) => ({ date: entry.date, bags: entry.bags })),
-        usableStock: Number(row.usable_bags),
-        parLevel: row.par_level,
+        usage: (row.usage ?? []).map((entry) => ({ date: entry.date, ml: entry.ml })),
+        usableStockMl: Number(row.usable_ml),
+        parLevelMl: row.par_level_ml,
         introducedOn: row.introduced_on,
       },
       {
@@ -72,14 +74,14 @@ export async function buildForecast(options: {
         asOf,
         windowDays,
         bufferMultiplier: options.bufferMultiplier ?? 1.1,
+        bagSizesMl,
       },
     )
 
     return {
       ...result,
-      bagSize: row.bag_size,
-      parLevel: row.par_level,
-      usableStock: Number(row.usable_bags),
+      parLevelMl: row.par_level_ml,
+      usableStockMl: Number(row.usable_ml),
       sealedBags: Number(row.sealed_bags),
       openedBags: Number(row.opened_bags),
     } satisfies SauceForecast
@@ -96,23 +98,25 @@ export interface PlanItemView {
   id: string
   sauceId: string
   sauceName: string
-  bagSize: '1L' | '2L'
-  suggestedBags: number
-  overrideBags: number | null
+  suggestedMl: number
+  overrideMl: number | null
   /** What the kitchen will actually be told to make. */
-  finalBags: number
+  finalMl: number
+  /** `finalMl` packed into the fewest, least-wasteful bags. */
+  pack: PackResult
   reasoning: ForecastReasoning | null
 }
 
 export interface PlanView {
   plan: PrepPlan
   items: PlanItemView[]
-  totalBags: number
+  totalMl: number
 }
 
 export async function getPlan(
   siteId: string,
   prepDate: DateOnly,
+  bagSizesMl: number[] = DEFAULT_BAG_SIZES_ML,
 ): Promise<PlanView | null> {
   const supabase = createServerSupabase()
 
@@ -127,30 +131,33 @@ export async function getPlan(
 
   const { data: items, error } = await supabase
     .from('prep_plan_items')
-    .select('*, sauces(name, bag_size, sort_order)')
+    .select('*, sauces(name, sort_order)')
     .eq('plan_id', plan.id)
-    .returns<Array<PrepPlanItem & { sauces: { name: string; bag_size: '1L' | '2L'; sort_order: number } | null }>>()
+    .returns<Array<PrepPlanItem & { sauces: { name: string; sort_order: number } | null }>>()
   if (error) throw new Error(`Loading plan items: ${error.message}`)
 
   const views: PlanItemView[] = (items ?? [])
-    .map((item) => ({
-      id: item.id,
-      sauceId: item.sauce_id,
-      sauceName: item.sauces?.name ?? 'Unknown sauce',
-      bagSize: item.sauces?.bag_size ?? '1L',
-      sortOrder: item.sauces?.sort_order ?? 0,
-      suggestedBags: item.suggested_bags,
-      overrideBags: item.override_bags,
-      finalBags: item.override_bags ?? item.suggested_bags,
-      reasoning: (item.reasoning as ForecastReasoning) ?? null,
-    }))
+    .map((item) => {
+      const finalMl = item.override_ml ?? item.suggested_ml
+      return {
+        id: item.id,
+        sauceId: item.sauce_id,
+        sauceName: item.sauces?.name ?? 'Unknown sauce',
+        sortOrder: item.sauces?.sort_order ?? 0,
+        suggestedMl: item.suggested_ml,
+        overrideMl: item.override_ml,
+        finalMl,
+        pack: packVolume(finalMl, bagSizesMl),
+        reasoning: (item.reasoning as ForecastReasoning) ?? null,
+      }
+    })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.sauceName.localeCompare(b.sauceName))
     .map(({ sortOrder: _sortOrder, ...rest }) => rest)
 
   return {
     plan,
     items: views,
-    totalBags: views.reduce((sum, item) => sum + item.finalBags, 0),
+    totalMl: views.reduce((sum, item) => sum + item.finalMl, 0),
   }
 }
 
@@ -175,9 +182,10 @@ export async function getRecentPlans(siteId: string | null, limit = 12): Promise
 
 export interface ChecklistEntry extends PrepChecklistRow {
   sauceName: string
-  bagSize: '1L' | '2L'
-  /** Bags already created from this checklist line. */
+  /** Bags already created from this checklist line, this session. */
   bagsCreated: number
+  /** Total ml those bags hold. */
+  mlCreated: number
 }
 
 export interface SessionView {
@@ -209,34 +217,32 @@ export async function getSessionForDate(
   const [{ data: entries }, { data: bags }] = await Promise.all([
     supabase
       .from('prep_checklist')
-      .select('*, sauces(name, bag_size, sort_order)')
+      .select('*, sauces(name, sort_order)')
       .eq('session_id', session.id)
       .returns<
-        Array<
-          PrepChecklistRow & {
-            sauces: { name: string; bag_size: '1L' | '2L'; sort_order: number } | null
-          }
-        >
+        Array<PrepChecklistRow & { sauces: { name: string; sort_order: number } | null }>
       >(),
     supabase
       .from('bags')
-      .select('sauce_id')
+      .select('sauce_id, size_ml')
       .eq('prep_session_id', session.id)
-      .returns<Array<{ sauce_id: string }>>(),
+      .returns<Array<{ sauce_id: string; size_ml: number }>>(),
   ])
 
   const bagCounts = new Map<string, number>()
+  const bagMl = new Map<string, number>()
   for (const bag of bags ?? []) {
     bagCounts.set(bag.sauce_id, (bagCounts.get(bag.sauce_id) ?? 0) + 1)
+    bagMl.set(bag.sauce_id, (bagMl.get(bag.sauce_id) ?? 0) + bag.size_ml)
   }
 
   const list: ChecklistEntry[] = (entries ?? [])
     .map((entry) => ({
       ...entry,
       sauceName: entry.sauces?.name ?? 'Unknown sauce',
-      bagSize: entry.sauces?.bag_size ?? ('1L' as const),
       sortOrder: entry.sauces?.sort_order ?? 0,
       bagsCreated: bagCounts.get(entry.sauce_id) ?? 0,
+      mlCreated: bagMl.get(entry.sauce_id) ?? 0,
     }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.sauceName.localeCompare(b.sauceName))
     .map(({ sortOrder: _sortOrder, sauces: _sauces, ...rest }) => rest)

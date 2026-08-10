@@ -52,6 +52,7 @@ export const getSessionContext = cache(async (): Promise<SessionContext | null> 
         low_stock_alerts_enabled: true,
         forecast_buffer: 1.1,
         forecast_window_days: 28,
+        bag_sizes_ml: [300, 500, 1000, 2000],
         updated_at: new Date().toISOString(),
       } satisfies AppSettings),
     isManager,

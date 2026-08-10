@@ -10,6 +10,7 @@ import {
   formatShort,
 } from '@/lib/date'
 import { detectWeekdaySpikes, type UsageObservation } from '@/lib/forecast/engine'
+import { formatMl } from '@/lib/utils/volume'
 import type {
   AlertSeverity,
   AlertType,
@@ -36,16 +37,14 @@ export interface AlertDraft {
  */
 function lowStockActions(context: {
   sauceName: string
-  shortfall: number
+  shortfallMl: number
   otherSiteName: string | null
 }): SuggestedAction[] {
   const actions: SuggestedAction[] = [
     {
       key: 'emergency_top_up',
       label: 'Emergency top-up',
-      description: `Run a small out-of-cycle batch of ${context.shortfall} bag${
-        context.shortfall === 1 ? '' : 's'
-      } of ${context.sauceName} to bridge the gap.`,
+      description: `Run a small out-of-cycle batch of ${formatMl(context.shortfallMl)} of ${context.sauceName} to bridge the gap.`,
     },
   ]
 
@@ -60,9 +59,7 @@ function lowStockActions(context: {
   actions.push({
     key: 'increase_next_batch',
     label: 'Increase the next batch',
-    description: `Add ${context.shortfall} bag${
-      context.shortfall === 1 ? '' : 's'
-    } to the next prep plan so this doesn't repeat.`,
+    description: `Add ${formatMl(context.shortfallMl)} to the next prep plan so this doesn't repeat.`,
   })
 
   return actions
@@ -99,18 +96,18 @@ export async function scanLowStock(
 
   for (const row of (data ?? []) as ForecastInputRow[]) {
     const usage = row.usage ?? []
-    const totalUsed = usage.reduce((sum, entry) => sum + entry.bags, 0)
+    const totalUsed = usage.reduce((sum, entry) => sum + entry.ml, 0)
     if (totalUsed === 0) continue
 
     const burnRate = totalUsed / options.windowDays
-    const expectedDemand = burnRate * daysToRestock
-    const usable = Number(row.usable_bags)
+    const expectedDemandMl = burnRate * daysToRestock
+    const usableMl = Number(row.usable_ml)
 
-    if (usable >= expectedDemand) continue
+    if (usableMl >= expectedDemandMl) continue
 
-    const shortfall = Math.max(1, Math.ceil(expectedDemand - usable))
+    const shortfallMl = Math.max(1, Math.ceil(expectedDemandMl - usableMl))
     // Out already, or out before restock — the difference matters to a manager.
-    const severity: AlertSeverity = usable === 0 ? 'critical' : 'warning'
+    const severity: AlertSeverity = usableMl === 0 ? 'critical' : 'warning'
 
     drafts.push({
       type: 'low_stock',
@@ -119,19 +116,19 @@ export async function scanLowStock(
       sauceId: row.sauce_id,
       title: `${row.sauce_name} will run out at ${site.name}`,
       message:
-        `${usable} bag${usable === 1 ? '' : 's'} in stock against ${expectedDemand.toFixed(1)} ` +
-        `bags of expected demand before the ${formatShort(nextPrep.date)} prep ` +
-        `(${burnRate.toFixed(1)} bags/day over the last ${options.windowDays} days).`,
+        `${formatMl(usableMl)} in stock against ${formatMl(expectedDemandMl)} ` +
+        `of expected demand before the ${formatShort(nextPrep.date)} prep ` +
+        `(${formatMl(burnRate)}/day over the last ${options.windowDays} days).`,
       suggestedActions: lowStockActions({
         sauceName: row.sauce_name,
-        shortfall,
+        shortfallMl,
         otherSiteName,
       }),
       metadata: {
-        burnRate: Number(burnRate.toFixed(2)),
-        usableBags: usable,
-        expectedDemand: Number(expectedDemand.toFixed(2)),
-        shortfall,
+        burnRateMl: Number(burnRate.toFixed(2)),
+        usableMl,
+        expectedDemandMl: Number(expectedDemandMl.toFixed(2)),
+        shortfallMl,
         daysToRestock,
         nextPrepDate: nextPrep.date,
       },
@@ -260,7 +257,7 @@ export async function scanPatterns(
   for (const row of (data ?? []) as ForecastInputRow[]) {
     const usage: UsageObservation[] = (row.usage ?? []).map((entry) => ({
       date: entry.date,
-      bags: entry.bags,
+      ml: entry.ml,
     }))
     if (usage.length < 20) continue
 

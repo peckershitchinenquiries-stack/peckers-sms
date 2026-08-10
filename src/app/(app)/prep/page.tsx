@@ -29,7 +29,7 @@ export default async function PrepPage({
   const [session, plan, sauces] = siteId
     ? await Promise.all([
         getSessionForDate(siteId, prepDate),
-        getPlan(siteId, prepDate),
+        getPlan(siteId, prepDate, context.settings.bag_sizes_ml),
         getSauces(),
       ])
     : [null, null, []]
@@ -60,9 +60,9 @@ export default async function PrepPage({
         sauces={sauces.map((sauce) => ({
           id: sauce.id,
           name: sauce.name,
-          bagSize: sauce.bag_size,
         }))}
         canManageSite={context.isManager}
+        bagSizesMl={context.settings.bag_sizes_ml}
       />
     </>
   )

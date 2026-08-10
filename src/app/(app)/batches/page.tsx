@@ -45,9 +45,9 @@ export default async function BatchesPage({
         sauces={sauces.map((sauce) => ({
           id: sauce.id,
           name: sauce.name,
-          bagSize: sauce.bag_size,
         }))}
         range={{ from, to }}
+        bagSizesMl={context.settings.bag_sizes_ml}
       />
     </>
   )

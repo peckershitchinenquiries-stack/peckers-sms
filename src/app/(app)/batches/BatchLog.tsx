@@ -14,12 +14,11 @@ import {
   SegmentedControl,
   Select,
   StatCard,
-  Stepper,
   Table,
   Tooltip,
   useToast,
 } from '@/components/ui'
-import { BagSizeBadge } from '@/components/app/StatusPills'
+import { PackBadge } from '@/components/app/StatusPills'
 import { logBatch } from '@/lib/actions/batches'
 import {
   formatRelativeDay,
@@ -29,6 +28,8 @@ import {
   today,
   type DateOnly,
 } from '@/lib/date'
+import { packVolume } from '@/lib/forecast/packing'
+import { formatMl } from '@/lib/utils/volume'
 import type { BatchRow } from '@/lib/queries/activity'
 import type { PrepVsPlanRow } from '@/lib/types/database'
 
@@ -38,8 +39,9 @@ export interface BatchLogProps {
   showSiteColumn: boolean
   batches: BatchRow[]
   comparison: PrepVsPlanRow[]
-  sauces: Array<{ id: string; name: string; bagSize: '1L' | '2L' }>
+  sauces: Array<{ id: string; name: string }>
   range: { from: DateOnly; to: DateOnly }
+  bagSizesMl: number[]
 }
 
 export function BatchLog({
@@ -50,6 +52,7 @@ export function BatchLog({
   comparison,
   sauces,
   range,
+  bagSizesMl,
 }: BatchLogProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -61,13 +64,15 @@ export function BatchLog({
 
   const [form, setForm] = React.useState<{
     sauceId: string | null
-    quantity: number
+    targetMl: number
+    pack: Record<number, number>
     prepDate: DateOnly
-  }>({ sauceId: null, quantity: 6, prepDate: today() })
+  }>({ sauceId: null, targetMl: 6000, pack: packVolume(6000, bagSizesMl).counts, prepDate: today() })
 
   const totals = React.useMemo(
     () => ({
       bags: batches.reduce((sum, batch) => sum + batch.totalBags, 0),
+      ml: batches.reduce((sum, batch) => sum + batch.totalMl, 0),
       live: batches.reduce((sum, batch) => sum + batch.sealed + batch.opened, 0),
       used: batches.reduce((sum, batch) => sum + batch.used, 0),
       discarded: batches.reduce((sum, batch) => sum + batch.discarded, 0),
@@ -94,6 +99,23 @@ export function BatchLog({
     router.push(`/batches?${params.toString()}`)
   }
 
+  const setTargetMl = (targetMl: number) => {
+    setForm((current) => ({ ...current, targetMl, pack: packVolume(targetMl, bagSizesMl).counts }))
+  }
+
+  const setPackCount = (size: number, count: number) => {
+    setForm((current) => ({ ...current, pack: { ...current.pack, [size]: Math.max(0, count) } }))
+  }
+
+  const packTotals = React.useMemo(() => {
+    const totalBags = Object.values(form.pack).reduce((sum, count) => sum + count, 0)
+    const totalMl = Object.entries(form.pack).reduce(
+      (sum, [size, count]) => sum + Number(size) * count,
+      0,
+    )
+    return { totalBags, totalMl }
+  }, [form.pack])
+
   const submit = () => {
     if (!form.sauceId) return
     const sauce = sauces.find((candidate) => candidate.id === form.sauceId)
@@ -103,7 +125,7 @@ export function BatchLog({
         sauceId: form.sauceId!,
         siteId: siteId ?? undefined,
         prepDate: form.prepDate,
-        quantity: form.quantity,
+        pack: form.pack,
       })
 
       if (!result.ok) {
@@ -113,11 +135,16 @@ export function BatchLog({
 
       toast({
         tone: 'success',
-        title: `${form.quantity} bags of ${sauce?.name ?? 'sauce'} logged`,
+        title: `${formatMl(result.data?.createdMl ?? 0)} of ${sauce?.name ?? 'sauce'} logged`,
         description: `Each bag expires ${formatShort(sealedExpiryFor(form.prepDate))}.`,
       })
       setLogOpen(false)
-      setForm((current) => ({ ...current, sauceId: null, quantity: 6 }))
+      setForm((current) => ({
+        ...current,
+        sauceId: null,
+        targetMl: 6000,
+        pack: packVolume(6000, bagSizesMl).counts,
+      }))
       router.refresh()
     })
   }
@@ -125,7 +152,7 @@ export function BatchLog({
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Bags made" value={totals.bags} unit="bags" icon="package" tone="brand" hint="In this period" />
+        <StatCard label="Volume made" value={formatMl(totals.ml)} icon="package" tone="brand" hint={`${totals.bags} bags · in this period`} />
         <StatCard label="Still live" value={totals.live} unit="bags" icon="clock" tone="success" hint="Sealed or opened" />
         <StatCard label="Used" value={totals.used} unit="bags" icon="check-circle" tone="neutral" />
         <StatCard
@@ -205,12 +232,7 @@ export function BatchLog({
             {
               key: 'sauce',
               header: 'Sauce',
-              cell: (row) => (
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-ink">{row.sauceName}</span>
-                  <BagSizeBadge size={row.bagSize} />
-                </div>
-              ),
+              cell: (row) => <span className="font-medium text-ink">{row.sauceName}</span>,
             },
             ...(showSiteColumn
               ? [
@@ -228,10 +250,15 @@ export function BatchLog({
                 ]
               : []),
             {
+              key: 'pack',
+              header: 'Pack',
+              cell: (row) => <PackBadge counts={row.sizes} />,
+            },
+            {
               key: 'total',
               header: 'Made',
               align: 'right',
-              cell: (row) => <span className="font-semibold text-ink">{row.totalBags}</span>,
+              cell: (row) => <span className="font-semibold text-ink">{formatMl(row.totalMl)}</span>,
             },
             {
               key: 'breakdown',
@@ -288,7 +315,7 @@ export function BatchLog({
             className="rounded-none border-0"
             stickyHeader={false}
             rowTone={(row) =>
-              Math.abs(row.variance) >= 5 ? 'warning' : row.actual_bags === 0 ? 'danger' : 'default'
+              Math.abs(row.variance_ml) >= 500 ? 'warning' : row.actual_ml === 0 ? 'danger' : 'default'
             }
             empty={{
               icon: 'scale',
@@ -311,19 +338,14 @@ export function BatchLog({
               {
                 key: 'sauce',
                 header: 'Sauce',
-                cell: (row) => (
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-ink">{row.sauce_name}</span>
-                    <BagSizeBadge size={row.bag_size} />
-                  </div>
-                ),
+                cell: (row) => <span className="font-medium text-ink">{row.sauce_name}</span>,
               },
               {
                 key: 'suggested',
                 header: 'Forecast',
                 align: 'right',
                 hideOnMobile: true,
-                cell: (row) => <span className="text-ink-muted">{row.suggested_bags}</span>,
+                cell: (row) => <span className="text-ink-muted">{formatMl(row.suggested_ml)}</span>,
               },
               {
                 key: 'planned',
@@ -331,9 +353,9 @@ export function BatchLog({
                 align: 'right',
                 cell: (row) => (
                   <span className="inline-flex items-center gap-1.5 font-medium text-ink">
-                    {row.planned_bags}
-                    {row.override_bags !== null && row.override_bags !== row.suggested_bags ? (
-                      <Tooltip content={`Manager overrode the forecast of ${row.suggested_bags}.`}>
+                    {formatMl(row.planned_ml)}
+                    {row.override_ml !== null && row.override_ml !== row.suggested_ml ? (
+                      <Tooltip content={`Manager overrode the forecast of ${formatMl(row.suggested_ml)}.`}>
                         <span className="text-brand">
                           <Icon name="edit" size={12} />
                         </span>
@@ -346,7 +368,7 @@ export function BatchLog({
                 key: 'actual',
                 header: 'Made',
                 align: 'right',
-                cell: (row) => <span className="font-semibold text-ink">{row.actual_bags}</span>,
+                cell: (row) => <span className="font-semibold text-ink">{formatMl(row.actual_ml)}</span>,
               },
               {
                 key: 'variance',
@@ -355,16 +377,16 @@ export function BatchLog({
                 cell: (row) => (
                   <Badge
                     size="sm"
-                    tone={row.variance === 0 ? 'success' : Math.abs(row.variance) >= 5 ? 'danger' : 'warning'}
+                    tone={row.variance_ml === 0 ? 'success' : Math.abs(row.variance_ml) >= 500 ? 'danger' : 'warning'}
                     icon={
-                      row.variance === 0
+                      row.variance_ml === 0
                         ? 'check'
-                        : row.variance > 0
+                        : row.variance_ml > 0
                           ? 'trending-up'
                           : 'trending-down'
                     }
                   >
-                    {row.variance > 0 ? `+${row.variance}` : row.variance}
+                    {row.variance_ml > 0 ? `+${formatMl(row.variance_ml)}` : formatMl(row.variance_ml)}
                   </Badge>
                 ),
               },
@@ -384,8 +406,12 @@ export function BatchLog({
             <Button variant="ghost" onClick={() => setLogOpen(false)}>
               Cancel
             </Button>
-            <Button loading={busy} disabled={!form.sauceId} onClick={submit}>
-              Create {form.quantity} bags
+            <Button
+              loading={busy}
+              disabled={!form.sauceId || packTotals.totalBags < 1}
+              onClick={submit}
+            >
+              Create {packTotals.totalBags} bags
             </Button>
           </>
         }
@@ -397,11 +423,7 @@ export function BatchLog({
             value={form.sauceId}
             onChange={(sauceId) => setForm((current) => ({ ...current, sauceId }))}
             placeholder="Choose a sauce"
-            options={sauces.map((sauce) => ({
-              value: sauce.id,
-              label: sauce.name,
-              description: `${sauce.bagSize} bags`,
-            }))}
+            options={sauces.map((sauce) => ({ value: sauce.id, label: sauce.name }))}
           />
 
           <DatePicker
@@ -412,14 +434,59 @@ export function BatchLog({
             hint={`Bags will be sealed until ${formatShort(sealedExpiryFor(form.prepDate))}.`}
           />
 
-          <Stepper
-            label="Bags made"
-            value={form.quantity}
-            onChange={(quantity) => setForm((current) => ({ ...current, quantity }))}
-            min={1}
-            max={500}
-            unit="bags"
-          />
+          <div>
+            <p className="mb-2 text-sm font-medium text-ink">Volume made</p>
+            <input
+              type="number"
+              inputMode="numeric"
+              step={100}
+              min={0}
+              value={form.targetMl}
+              onChange={(event) => setTargetMl(Number(event.target.value) || 0)}
+              className="h-11 w-full rounded-lg border border-border bg-surface px-3.5 text-sm font-semibold tabular-nums text-ink focus-ring-inset"
+            />
+            <p className="mt-1 text-2xs text-ink-subtle">
+              Pack pre-filled with the least-wasteful mix — adjust below if needed.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {bagSizesMl.map((size) => {
+              const count = form.pack[size] ?? 0
+              return (
+                <div
+                  key={size}
+                  className="flex items-center overflow-hidden rounded-lg border border-border bg-surface"
+                >
+                  <button
+                    type="button"
+                    disabled={count <= 0}
+                    onClick={() => setPackCount(size, count - 1)}
+                    aria-label={`Fewer ${size}ml bags`}
+                    className="grid h-10 w-8 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    <Icon name="minus" size={13} />
+                  </button>
+                  <span className="w-16 text-center text-sm font-medium tabular-nums text-ink">
+                    {count} × {size}ml
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPackCount(size, count + 1)}
+                    aria-label={`More ${size}ml bags`}
+                    className="grid h-10 w-8 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
+                  >
+                    <Icon name="plus" size={13} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg bg-surface-sunken px-3.5 py-2.5 text-sm">
+            <span className="text-ink-muted">Pack total</span>
+            <span className="font-semibold tabular-nums text-ink">{formatMl(packTotals.totalMl)}</span>
+          </div>
         </div>
       </Modal>
     </div>

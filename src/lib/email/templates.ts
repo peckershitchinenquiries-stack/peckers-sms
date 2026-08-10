@@ -1,4 +1,5 @@
 import type { DateOnly } from '@/lib/date'
+import { formatMl } from '@/lib/utils/volume'
 
 /* -------------------------------------------------------------------------- */
 /* Shared shell                                                               */
@@ -78,7 +79,7 @@ export interface DigestSiteSection {
   siteName: string
   expiringToday: Array<{ sauceName: string; bags: number }>
   expiringSoon: Array<{ sauceName: string; bags: number; days: number }>
-  lowStock: Array<{ sauceName: string; usableBags: number; burnRate: number }>
+  lowStock: Array<{ sauceName: string; usableMl: number; burnRateMl: number }>
 }
 
 export interface DigestPayload {
@@ -130,7 +131,7 @@ export function renderDigestEmail(payload: DigestPayload): { subject: string; ht
       ),
       ...section.lowStock.map(
         (item) =>
-          `  ↓ ${item.sauceName}: ${item.usableBags} left, using ~${item.burnRate}/day`,
+          `  ↓ ${item.sauceName}: ${formatMl(item.usableMl)} left, using ~${formatMl(item.burnRateMl)}/day`,
       ),
       '',
     ]),
@@ -168,7 +169,7 @@ function renderSection(section: DigestSiteSection): string {
     rows.push(
       row(
         item.sauceName,
-        `${item.usableBags} left · using ~${item.burnRate}/day`,
+        `${formatMl(item.usableMl)} left · using ~${formatMl(item.burnRateMl)}/day`,
         COLOURS.warning,
         COLOURS.warningSoft,
       ),
@@ -209,8 +210,8 @@ function row(name: string, detail: string, accent: string, background: string): 
 export interface LowStockEmailPayload {
   siteName: string
   sauceName: string
-  usableBags: number
-  burnRate: number
+  usableMl: number
+  burnRateMl: number
   nextPrepLabel: string
   actions: Array<{ label: string; description: string }>
   appUrl?: string
@@ -235,10 +236,10 @@ export function renderLowStockEmail(payload: LowStockEmailPayload): {
   const body = `
     <div style="background:${COLOURS.dangerSoft};border:1px solid #F8D8D3;border-radius:10px;padding:16px;margin-bottom:20px;">
       <p style="margin:0;font-size:15px;font-weight:600;color:${COLOURS.danger};">
-        ${escapeHtml(payload.sauceName)} — ${payload.usableBags} bag${payload.usableBags === 1 ? '' : 's'} left at ${escapeHtml(payload.siteName)}
+        ${escapeHtml(payload.sauceName)} — ${formatMl(payload.usableMl)} left at ${escapeHtml(payload.siteName)}
       </p>
       <p style="margin:6px 0 0;font-size:13px;line-height:1.6;color:${COLOURS.inkMuted};">
-        Using about ${payload.burnRate} bags a day. Next prep is ${escapeHtml(payload.nextPrepLabel)}, so this will run out before restock.
+        Using about ${formatMl(payload.burnRateMl)} a day. Next prep is ${escapeHtml(payload.nextPrepLabel)}, so this will run out before restock.
       </p>
     </div>
     <p style="margin:0 0 10px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:${COLOURS.inkMuted};font-weight:600;">Suggested actions</p>
@@ -246,7 +247,7 @@ export function renderLowStockEmail(payload: LowStockEmailPayload): {
 
   const text = [
     `${payload.sauceName} running low at ${payload.siteName}`,
-    `${payload.usableBags} bags left, using ~${payload.burnRate}/day. Next prep: ${payload.nextPrepLabel}.`,
+    `${formatMl(payload.usableMl)} left, using ~${formatMl(payload.burnRateMl)}/day. Next prep: ${payload.nextPrepLabel}.`,
     '',
     'Suggested actions:',
     ...payload.actions.map((action) => `- ${action.label}: ${action.description}`),

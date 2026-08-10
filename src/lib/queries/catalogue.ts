@@ -28,9 +28,9 @@ export async function getParLevels(): Promise<ParLevel[]> {
   return data ?? []
 }
 
-/** `sauceId:siteId` -> target bags, for quick lookup in tables. */
+/** `sauceId:siteId` -> target ml, for quick lookup in tables. */
 export function indexParLevels(parLevels: ParLevel[]): Map<string, number> {
-  return new Map(parLevels.map((par) => [`${par.sauce_id}:${par.site_id}`, par.target_bags]))
+  return new Map(parLevels.map((par) => [`${par.sauce_id}:${par.site_id}`, par.target_ml]))
 }
 
 export async function getStaff(): Promise<Profile[]> {

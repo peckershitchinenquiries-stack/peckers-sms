@@ -26,11 +26,11 @@ import {
 const TUESDAY = '2026-08-04'
 const FRIDAY = '2026-08-07'
 
-/** Generates `days` of usage ending on `endDate`, `perDay` bags each day. */
-function steadyUsage(endDate: string, days: number, perDay: number): UsageObservation[] {
+/** Generates `days` of usage ending on `endDate`, `perDayMl` ml each day. */
+function steadyUsage(endDate: string, days: number, perDayMl: number): UsageObservation[] {
   return Array.from({ length: days }, (_, index) => ({
     date: addDaysTo(endDate, -(days - 1 - index)),
-    bags: perDay,
+    ml: perDayMl,
   }))
 }
 
@@ -38,9 +38,9 @@ function baseInput(overrides: Partial<ForecastInput> = {}): ForecastInput {
   return {
     sauceId: 'sauce-1',
     sauceName: 'Ranch',
-    usage: steadyUsage(TUESDAY, 28, 2),
-    usableStock: 0,
-    parLevel: 0,
+    usage: steadyUsage(TUESDAY, 28, 2000),
+    usableStockMl: 0,
+    parLevelMl: 0,
     introducedOn: addDaysTo(TUESDAY, -120),
     ...overrides,
   }
@@ -109,59 +109,74 @@ describe('date rules', () => {
 
 describe('forecastSauce — normal case', () => {
   it('projects need across the covered days, subtracts stock and adds the buffer', () => {
-    const result = forecastSauce(baseInput({ usableStock: 1 }), {
+    const result = forecastSauce(baseInput({ usableStockMl: 1000 }), {
       prepDate: TUESDAY,
       coversDays: 3,
       asOf: TUESDAY,
     })
 
-    // 56 bags over 28 days = 2/day. Flat usage means every multiplier is 1.
-    expect(result.reasoning.burnRatePerDay).toBe(2)
+    // 56000ml over 28 days = 2000ml/day. Flat usage means every multiplier is 1.
+    expect(result.reasoning.burnRatePerDay).toBe(2000)
     expect(result.reasoning.observedDays).toBe(28)
-    expect(result.reasoning.projectedNeed).toBe(6)
+    expect(result.reasoning.projectedNeedMl).toBe(6000)
 
-    // (6 needed - 1 in stock) * 1.1 = 5.5 -> 6 bags.
-    expect(result.reasoning.rawSuggestion).toBe(5.5)
-    expect(result.suggestedBags).toBe(6)
+    // (6000 needed - 1000 in stock) * 1.1 = 5500ml.
+    expect(result.reasoning.rawSuggestionMl).toBe(5500)
+    expect(result.suggestedMl).toBe(5500)
     expect(result.reasoning.method).toBe('history')
     expect(result.reasoning.confidence).toBe('high')
   })
 
   it('covers 4 days for a Friday batch', () => {
     // Usage must run up to `asOf`, otherwise the tail of the window is empty.
-    const result = forecastSauce(baseInput({ usage: steadyUsage(FRIDAY, 28, 2) }), {
+    const result = forecastSauce(baseInput({ usage: steadyUsage(FRIDAY, 28, 2000) }), {
       prepDate: FRIDAY,
       coversDays: 4,
       asOf: FRIDAY,
     })
 
     expect(result.reasoning.coverageDates).toHaveLength(4)
-    expect(result.reasoning.projectedNeed).toBe(8)
-    expect(result.suggestedBags).toBe(Math.ceil(8 * DEFAULT_BUFFER))
+    expect(result.reasoning.projectedNeedMl).toBe(8000)
+    expect(result.suggestedMl).toBe(Math.ceil(8000 * DEFAULT_BUFFER))
   })
 
   it('never suggests a negative quantity when stock already exceeds demand', () => {
-    const result = forecastSauce(baseInput({ usableStock: 50 }), {
+    const result = forecastSauce(baseInput({ usableStockMl: 50_000 }), {
       prepDate: TUESDAY,
       coversDays: 3,
       asOf: TUESDAY,
     })
 
-    expect(result.suggestedBags).toBe(0)
+    expect(result.suggestedMl).toBe(0)
+    expect(result.pack.counts).toEqual({})
     expect(result.lowStock).toBe(false)
   })
 
-  it('counts opened bags toward usable stock', () => {
-    // 4 usable = 2 sealed + 2 opened; both are reachable by the kitchen.
-    const result = forecastSauce(baseInput({ usableStock: 4 }), {
+  it('counts opened stock toward usable stock', () => {
+    // 4000ml usable = 2000 sealed + 2000 opened; both are reachable by the kitchen.
+    const result = forecastSauce(baseInput({ usableStockMl: 4000 }), {
       prepDate: TUESDAY,
       coversDays: 3,
       asOf: TUESDAY,
     })
 
-    expect(result.reasoning.usableStock).toBe(4)
-    // (6 - 4) * 1.1 = 2.2 -> 3
-    expect(result.suggestedBags).toBe(3)
+    expect(result.reasoning.usableStockMl).toBe(4000)
+    // (6000 - 4000) * 1.1 = 2200
+    expect(result.suggestedMl).toBe(2200)
+  })
+
+  it('packs the suggested volume into the fewest, least-wasteful bags', () => {
+    // Real client-scale figures: Hitchin House Mayo Tuesday batch (Tue+Wed+Thu
+    // from the client's document: 1000 + 3000 + 2000 = 6000ml/day average).
+    const result = forecastSauce(
+      baseInput({ usage: steadyUsage(TUESDAY, 28, 2000), usableStockMl: 0, parLevelMl: 0 }),
+      { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY, bufferMultiplier: 1 },
+    )
+
+    // 2000ml/day x 3 days = 6000ml needed, no buffer -> suggestedMl = 6000.
+    expect(result.suggestedMl).toBe(6000)
+    expect(result.pack.counts).toEqual({ 2000: 3 })
+    expect(result.pack.wasteMl).toBe(0)
   })
 })
 
@@ -170,13 +185,13 @@ describe('forecastSauce — normal case', () => {
 describe('forecastSauce — no history fallback', () => {
   it('falls back to the par level and marks the suggestion low-confidence', () => {
     const result = forecastSauce(
-      baseInput({ usage: [], parLevel: 10, usableStock: 2 }),
+      baseInput({ usage: [], parLevelMl: 10_000, usableStockMl: 2000 }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
     )
 
     expect(result.reasoning.method).toBe('par_fallback')
     expect(result.reasoning.confidence).toBe('low')
-    expect(result.suggestedBags).toBe(8) // par 10 - 2 in stock
+    expect(result.suggestedMl).toBe(8000) // 10000 par - 2000 in stock
     expect(result.reasoning.notes.join(' ')).toMatch(/no usage history/i)
     expect(explainForecast(result)).toMatch(/par level/i)
   })
@@ -185,25 +200,25 @@ describe('forecastSauce — no history fallback', () => {
     const result = forecastSauce(
       baseInput({
         usage: steadyUsage(TUESDAY, 28, 0),
-        parLevel: 6,
-        usableStock: 0,
+        parLevelMl: 6000,
+        usableStockMl: 0,
       }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
     )
 
     expect(result.reasoning.method).toBe('par_fallback')
     expect(result.reasoning.confidence).toBe('low')
-    expect(result.suggestedBags).toBe(6)
+    expect(result.suggestedMl).toBe(6000)
   })
 
   it('suggests zero when there is neither history nor a par level', () => {
-    const result = forecastSauce(baseInput({ usage: [], parLevel: 0 }), {
+    const result = forecastSauce(baseInput({ usage: [], parLevelMl: 0 }), {
       prepDate: TUESDAY,
       coversDays: 3,
       asOf: TUESDAY,
     })
 
-    expect(result.suggestedBags).toBe(0)
+    expect(result.suggestedMl).toBe(0)
     expect(result.reasoning.confidence).toBe('low')
   })
 })
@@ -212,19 +227,19 @@ describe('forecastSauce — no history fallback', () => {
 
 describe('forecastSauce — new sauce, partial window', () => {
   it('divides by days since introduction rather than the full window', () => {
-    // Introduced 7 days ago, 21 bags used in total.
+    // Introduced 7 days ago, 21000ml used in total.
     const introducedOn = addDaysTo(TUESDAY, -6)
     const result = forecastSauce(
       baseInput({
-        usage: steadyUsage(TUESDAY, 7, 3),
+        usage: steadyUsage(TUESDAY, 7, 3000),
         introducedOn,
       }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
     )
 
     expect(result.reasoning.observedDays).toBe(7)
-    // 21 / 7 = 3/day, NOT 21 / 28 = 0.75/day.
-    expect(result.reasoning.burnRatePerDay).toBe(3)
+    // 21000 / 7 = 3000/day, NOT 21000 / 28 = 750/day.
+    expect(result.reasoning.burnRatePerDay).toBe(3000)
     expect(result.reasoning.method).toBe('partial_history')
     expect(result.reasoning.confidence).toBe('low')
     expect(result.reasoning.notes.join(' ')).toMatch(/introduced 7 days ago/i)
@@ -233,7 +248,7 @@ describe('forecastSauce — new sauce, partial window', () => {
   it('upgrades confidence to medium once there are two weeks of data', () => {
     const result = forecastSauce(
       baseInput({
-        usage: steadyUsage(TUESDAY, 20, 2),
+        usage: steadyUsage(TUESDAY, 20, 2000),
         introducedOn: addDaysTo(TUESDAY, -19),
       }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
@@ -247,17 +262,17 @@ describe('forecastSauce — new sauce, partial window', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('weekday pattern detection', () => {
-  /** 4 weeks where Fridays run at 7 bags and every other day at 2. */
+  /** 4 weeks where Fridays run at 7000ml and every other day at 2000ml. */
   function fridaySpikeUsage(): UsageObservation[] {
     return Array.from({ length: 28 }, (_, index) => {
       const date = addDaysTo(TUESDAY, -(27 - index))
-      return { date, bags: weekdayOf(date) === 5 ? 7 : 2 }
+      return { date, ml: weekdayOf(date) === 5 ? 7000 : 2000 }
     })
   }
 
   it('derives a multiplier above 1 for the spiking weekday', () => {
     const usage = fridaySpikeUsage()
-    const total = usage.reduce((sum, row) => sum + row.bags, 0)
+    const total = usage.reduce((sum, row) => sum + row.ml, 0)
     const burnRate = total / 28
 
     const multipliers = computeWeekdayMultipliers(usage, burnRate, 28)
@@ -281,8 +296,8 @@ describe('weekday pattern detection', () => {
   })
 
   it('holds every multiplier at 1 when there is too little history to trust', () => {
-    const usage = steadyUsage(TUESDAY, 5, 3)
-    const multipliers = computeWeekdayMultipliers(usage, 3, 5)
+    const usage = steadyUsage(TUESDAY, 5, 3000)
+    const multipliers = computeWeekdayMultipliers(usage, 3000, 5)
     expect(Object.values(multipliers).every((value) => value === 1)).toBe(true)
   })
 
@@ -306,29 +321,29 @@ const SPIKE_MIN = 1.25
 
 describe('par level floor and low-stock flag', () => {
   it('raises a small suggestion up to the par gap', () => {
-    // Burn rate 0.5/day -> ~1.5 bags needed, but par says keep 10 on hand.
+    // Burn rate 500ml/day -> ~1500ml needed, but par says keep 10000ml on hand.
     const result = forecastSauce(
-      baseInput({ usage: steadyUsage(TUESDAY, 28, 0.5), parLevel: 10, usableStock: 3 }),
+      baseInput({ usage: steadyUsage(TUESDAY, 28, 500), parLevelMl: 10_000, usableStockMl: 3000 }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
     )
 
     expect(result.reasoning.parFloorApplied).toBe(true)
-    expect(result.suggestedBags).toBe(7) // 10 target - 3 in stock
+    expect(result.suggestedMl).toBe(7000) // 10000 target - 3000 in stock
   })
 
   it('does not lower a suggestion that already exceeds the par gap', () => {
     const result = forecastSauce(
-      baseInput({ usage: steadyUsage(TUESDAY, 28, 5), parLevel: 4, usableStock: 0 }),
+      baseInput({ usage: steadyUsage(TUESDAY, 28, 5000), parLevelMl: 4000, usableStockMl: 0 }),
       { prepDate: TUESDAY, coversDays: 3, asOf: TUESDAY },
     )
 
     expect(result.reasoning.parFloorApplied).toBe(false)
-    expect(result.suggestedBags).toBe(Math.ceil(15 * DEFAULT_BUFFER))
+    expect(result.suggestedMl).toBe(Math.ceil(15_000 * DEFAULT_BUFFER))
   })
 
   it('flags a sauce that will run out before the next prep day', () => {
-    // 2 bags/day, 2 bags in stock, prep is 3 days away.
-    const result = forecastSauce(baseInput({ usableStock: 2 }), {
+    // 2000ml/day, 2000ml in stock, prep is 3 days away.
+    const result = forecastSauce(baseInput({ usableStockMl: 2000 }), {
       prepDate: FRIDAY,
       coversDays: 4,
       asOf: '2026-08-04',
@@ -339,7 +354,7 @@ describe('par level floor and low-stock flag', () => {
   })
 
   it('does not flag low stock when there is enough to reach the prep day', () => {
-    const result = forecastSauce(baseInput({ usableStock: 20 }), {
+    const result = forecastSauce(baseInput({ usableStockMl: 20_000 }), {
       prepDate: FRIDAY,
       coversDays: 4,
       asOf: '2026-08-04',

@@ -37,12 +37,13 @@ export default async function PlannerPage({
   const prepDay = upcomingPrepDay(requestedDate ?? today())
 
   const [existingPlan, forecast] = await Promise.all([
-    getPlan(siteId, prepDay.date),
+    getPlan(siteId, prepDay.date, context.settings.bag_sizes_ml),
     buildForecast({
       siteId,
       prepDate: prepDay.date,
       windowDays: context.settings.forecast_window_days,
       bufferMultiplier: Number(context.settings.forecast_buffer),
+      bagSizesMl: context.settings.bag_sizes_ml,
     }),
   ])
 
@@ -67,6 +68,7 @@ export default async function PlannerPage({
         plan={existingPlan}
         windowDays={context.settings.forecast_window_days}
         bufferMultiplier={Number(context.settings.forecast_buffer)}
+        bagSizesMl={context.settings.bag_sizes_ml}
       />
     </>
   )

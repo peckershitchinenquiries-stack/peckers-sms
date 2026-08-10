@@ -34,13 +34,12 @@ These drive every calculation in the app and are enforced in the database, not j
 | **Sealed shelf life** | 5 days from the prep date. |
 | **Opened shelf life** | 2 days from opening — `opened_expiry = min(sealed_expiry, opened_date + 2 days)`. Opening a bag can only ever shorten its life. |
 | **Prep process** | 3 steps per sauce: **Cooked → Blast Chilled (1.5 hr) → Vacuum Packed**. |
-| **Bag sizes** | 2L for 5 sauces, 1L for the other 10. Fixed per recipe. |
-| **Par levels** | Configurable per sauce **per site**. Acts as a floor on the forecast. |
+| **Bag sizes** | 300 / 500 / 1000 / 2000ml, configurable in Settings (`app_settings.bag_sizes_ml`). Every batch is packed into whichever mix wastes the least volume — see `src/lib/forecast/packing.ts`. |
+| **Par levels** | Configurable per sauce **per site**, in ml. Acts as a floor on the forecast. |
 
 ### The 15 sauces
 
-**2L bags** — Buffalo, Butter Me Up, Garlic Aioli, House Mayo, Supercharged OG
-**1L bags** — Hot Honey, Cheese Sauce, Mango Pineapple, Katsu Curry, Peanut Sweet Chilli, Honey Glaze BBQ, Korean Gochujang, Korean Glaze, OG Chilli, Ranch
+Buffalo, Butter Me Up, Garlic Aioli, House Mayo, Supercharged OG, Hot Honey, Cheese Sauce, Mango Pineapple, Katsu Curry, Peanut Sweet Chilli, Honey Glaze BBQ, Korean Gochujang, Korean Glaze, OG Chilli, Ranch
 
 ### Roles
 
@@ -214,13 +213,13 @@ For fake demo data instead (dev/staging only), see [Local development with demo 
 
 ```
 sites ──┬── profiles (fk auth.users, role, site_id)
-        ├── par_levels ─── sauces
-        ├── prep_plans ─── prep_plan_items (suggested_bags, override_bags, reasoning jsonb)
-        ├── prep_sessions ─┬─ prep_checklist (cooked_at, blast_chilled_at, vacuum_packed_at)
-        │                  └─ bags (ONE ROW PER PHYSICAL BAG)
-        ├── usage_logs
+        ├── par_levels (target_ml) ─── sauces
+        ├── prep_plans ─── prep_plan_items (suggested_ml, override_ml, reasoning jsonb)
+        ├── prep_sessions ─┬─ prep_checklist (planned_ml, cooked_at, blast_chilled_at, vacuum_packed_at)
+        │                  └─ bags (ONE ROW PER PHYSICAL BAG, size_ml)
+        ├── usage_logs (ml_used)
         └── alerts
-app_settings (singleton: timezone, digest hour, recipients, forecast buffer & window)
+app_settings (singleton: timezone, digest hour, recipients, forecast buffer & window, bag_sizes_ml)
 ```
 
 `bags` is the heart of the system — one row per physical vacuum-sealed bag, carrying its own `sealed_expiry`, `opened_expiry` and status. A database trigger applies the shelf-life rules on every write, so they hold no matter which client does the writing.

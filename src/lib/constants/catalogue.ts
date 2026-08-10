@@ -1,11 +1,8 @@
-import type { BagSizeValue } from '@/lib/types/database'
-
 export interface SauceSeed {
   name: string
   slug: string
-  bagSize: BagSizeValue
-  /** Rough par level used to seed both sites; managers tune it per site. */
-  defaultPar: number
+  /** Rough par level (ml) used to seed both sites; managers tune it per site. */
+  defaultParMl: number
 }
 
 /** The two Peckers kitchens. */
@@ -15,34 +12,29 @@ export const SITE_SEEDS = [
 ] as const
 
 /**
- * The 15 house sauces. Bag size is a fixed property of the recipe:
- * 5 sauces go into 2L bags, the other 10 into 1L bags.
+ * The four bag sizes every batch is packed across. Configurable later in
+ * Settings (app_settings.bag_sizes_ml) — this is only the seed default.
  */
+export const BAG_SIZES_ML = [300, 500, 1000, 2000]
+
+/** The 15 house sauces. Bag size is no longer fixed per recipe — every batch is packed into whichever mix of BAG_SIZES_ML wastes the least. */
 export const SAUCE_SEEDS: SauceSeed[] = [
-  // 2L bags
-  { name: 'Buffalo', slug: 'buffalo', bagSize: '2L', defaultPar: 12 },
-  { name: 'Butter Me Up', slug: 'butter-me-up', bagSize: '2L', defaultPar: 8 },
-  { name: 'Garlic Aioli', slug: 'garlic-aioli', bagSize: '2L', defaultPar: 14 },
-  { name: 'House Mayo', slug: 'house-mayo', bagSize: '2L', defaultPar: 16 },
-  { name: 'Supercharged OG', slug: 'supercharged-og', bagSize: '2L', defaultPar: 10 },
-
-  // 1L bags
-  { name: 'Hot Honey', slug: 'hot-honey', bagSize: '1L', defaultPar: 10 },
-  { name: 'Cheese Sauce', slug: 'cheese-sauce', bagSize: '1L', defaultPar: 12 },
-  { name: 'Mango Pineapple', slug: 'mango-pineapple', bagSize: '1L', defaultPar: 6 },
-  { name: 'Katsu Curry', slug: 'katsu-curry', bagSize: '1L', defaultPar: 8 },
-  { name: 'Peanut Sweet Chilli', slug: 'peanut-sweet-chilli', bagSize: '1L', defaultPar: 6 },
-  { name: 'Honey Glaze BBQ', slug: 'honey-glaze-bbq', bagSize: '1L', defaultPar: 10 },
-  { name: 'Korean Gochujang', slug: 'korean-gochujang', bagSize: '1L', defaultPar: 8 },
-  { name: 'Korean Glaze', slug: 'korean-glaze', bagSize: '1L', defaultPar: 8 },
-  { name: 'OG Chilli', slug: 'og-chilli', bagSize: '1L', defaultPar: 10 },
-  { name: 'Ranch', slug: 'ranch', bagSize: '1L', defaultPar: 14 },
+  { name: 'Buffalo', slug: 'buffalo', defaultParMl: 24_000 },
+  { name: 'Butter Me Up', slug: 'butter-me-up', defaultParMl: 16_000 },
+  { name: 'Garlic Aioli', slug: 'garlic-aioli', defaultParMl: 28_000 },
+  { name: 'House Mayo', slug: 'house-mayo', defaultParMl: 32_000 },
+  { name: 'Supercharged OG', slug: 'supercharged-og', defaultParMl: 20_000 },
+  { name: 'Hot Honey', slug: 'hot-honey', defaultParMl: 10_000 },
+  { name: 'Cheese Sauce', slug: 'cheese-sauce', defaultParMl: 12_000 },
+  { name: 'Mango Pineapple', slug: 'mango-pineapple', defaultParMl: 6_000 },
+  { name: 'Katsu Curry', slug: 'katsu-curry', defaultParMl: 8_000 },
+  { name: 'Peanut Sweet Chilli', slug: 'peanut-sweet-chilli', defaultParMl: 6_000 },
+  { name: 'Honey Glaze BBQ', slug: 'honey-glaze-bbq', defaultParMl: 10_000 },
+  { name: 'Korean Gochujang', slug: 'korean-gochujang', defaultParMl: 8_000 },
+  { name: 'Korean Glaze', slug: 'korean-glaze', defaultParMl: 8_000 },
+  { name: 'OG Chilli', slug: 'og-chilli', defaultParMl: 10_000 },
+  { name: 'Ranch', slug: 'ranch', defaultParMl: 14_000 },
 ]
-
-export const BAG_SIZE_LABEL: Record<BagSizeValue, string> = {
-  '1L': '1 litre',
-  '2L': '2 litre',
-}
 
 /** The three prep steps, in order. Staff tick them off left to right. */
 export const PREP_STEPS = [

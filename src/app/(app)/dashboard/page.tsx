@@ -25,6 +25,7 @@ import {
   StatCard,
 } from '@/components/ui'
 import { ExpiryBadge } from '@/components/app/StatusPills'
+import { formatMl } from '@/lib/utils/volume'
 import { UsageSparkline } from './UsageSparkline'
 import { DashboardAlerts } from './DashboardAlerts'
 
@@ -64,15 +65,16 @@ export default async function DashboardPage({
         prepDate: prepDay.date,
         windowDays: context.settings.forecast_window_days,
         bufferMultiplier: Number(context.settings.forecast_buffer),
+        bagSizesMl: context.settings.bag_sizes_ml,
       })),
     })),
   )
 
   const expiry = summariseExpiry(bags)
-  const totalStock = stock.reduce((sum, row) => sum + row.usable_bags, 0)
-  const belowPar = stock.filter((row) => row.par_level > 0 && row.usable_bags < row.par_level)
-  const suggestedTotal = forecasts.reduce(
-    (sum, entry) => sum + entry.forecasts.reduce((n, f) => n + f.suggestedBags, 0),
+  const totalStockMl = stock.reduce((sum, row) => sum + row.usable_ml, 0)
+  const belowPar = stock.filter((row) => row.par_level_ml > 0 && row.usable_ml < row.par_level_ml)
+  const suggestedTotalMl = forecasts.reduce(
+    (sum, entry) => sum + entry.forecasts.reduce((n, f) => n + f.suggestedMl, 0),
     0,
   )
   const lowStockSauces = forecasts.flatMap((entry) =>
@@ -83,7 +85,7 @@ export default async function DashboardPage({
 
   const attention = bags.filter((bag) => bag.daysRemaining <= 2).slice(0, 8)
 
-  const weekVariance = comparison.reduce((sum, row) => sum + row.variance, 0)
+  const weekVarianceMl = comparison.reduce((sum, row) => sum + row.variance_ml, 0)
 
   return (
     <>
@@ -112,9 +114,8 @@ export default async function DashboardPage({
       {/* ------------------------------------------------------------------ */}
       <section aria-label="Today's snapshot" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Bags in stock"
-          value={totalStock}
-          unit="bags"
+          label="Volume in stock"
+          value={formatMl(totalStockMl)}
           icon="package"
           tone="brand"
           hint={`${belowPar.length} sauce${belowPar.length === 1 ? '' : 's'} below par`}
@@ -159,7 +160,7 @@ export default async function DashboardPage({
           <CardHeader
             eyebrow={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} batch · ${prepDay.coversDays}-day cover`}
             title={`Forecast for ${formatShort(prepDay.date)}`}
-            description={`${suggestedTotal} bags suggested across ${forecastSites.length === 1 ? 'this kitchen' : 'both kitchens'}, based on a ${context.settings.forecast_window_days}-day rolling window.`}
+            description={`${formatMl(suggestedTotalMl)} suggested across ${forecastSites.length === 1 ? 'this kitchen' : 'both kitchens'}, based on a ${context.settings.forecast_window_days}-day rolling window.`}
             actions={
               <LinkButton href="/planner" variant="ghost" size="sm" trailingIcon="arrow-right">
                 Plan it
@@ -177,10 +178,10 @@ export default async function DashboardPage({
             <div className="space-y-6">
               {forecasts.map((entry) => {
                 const top = [...entry.forecasts]
-                  .sort((a, b) => b.suggestedBags - a.suggestedBags)
+                  .sort((a, b) => b.suggestedMl - a.suggestedMl)
                   .slice(0, 6)
-                const peak = Math.max(...top.map((f) => f.suggestedBags), 1)
-                const siteTotal = entry.forecasts.reduce((sum, f) => sum + f.suggestedBags, 0)
+                const peak = Math.max(...top.map((f) => f.suggestedMl), 1)
+                const siteTotal = entry.forecasts.reduce((sum, f) => sum + f.suggestedMl, 0)
 
                 return (
                   <div key={entry.site.id}>
@@ -190,7 +191,7 @@ export default async function DashboardPage({
                         {entry.site.name}
                       </p>
                       <p className="text-sm font-semibold tabular-nums text-ink">
-                        {siteTotal} bags
+                        {formatMl(siteTotal)}
                       </p>
                     </div>
 
@@ -213,8 +214,8 @@ export default async function DashboardPage({
                                 ) : null}
                               </span>
                             }
-                            valueLabel={`${forecast.suggestedBags} bags · ${forecast.usableStock} in stock`}
-                            value={forecast.suggestedBags}
+                            valueLabel={`${formatMl(forecast.suggestedMl)} · ${formatMl(forecast.usableStockMl)} in stock`}
+                            value={forecast.suggestedMl}
                             max={peak}
                             tone={forecast.lowStock ? 'danger' : 'brand'}
                             size="sm"
@@ -276,7 +277,7 @@ export default async function DashboardPage({
                       <span>·</span>
                       <span className="capitalize">{bag.status}</span>
                       <span>·</span>
-                      <span>{bag.bagSize}</span>
+                      <span>{formatMl(bag.sizeMl)}</span>
                     </p>
                   </div>
                   <ExpiryBadge level={bag.level} label={bag.label} size="sm" />
@@ -296,11 +297,11 @@ export default async function DashboardPage({
             description={
               comparison.length === 0
                 ? 'No plans in the last week to compare against.'
-                : weekVariance === 0
+                : weekVarianceMl === 0
                   ? 'Production matched the plan exactly.'
-                  : weekVariance > 0
-                    ? `${weekVariance} bags more were made than planned.`
-                    : `${Math.abs(weekVariance)} bags fewer were made than planned.`
+                  : weekVarianceMl > 0
+                    ? `${formatMl(weekVarianceMl)} more were made than planned.`
+                    : `${formatMl(Math.abs(weekVarianceMl))} fewer were made than planned.`
             }
           />
 
@@ -314,7 +315,7 @@ export default async function DashboardPage({
           ) : (
             <ul className="space-y-2.5">
               {[...comparison]
-                .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance))
+                .sort((a, b) => Math.abs(b.variance_ml) - Math.abs(a.variance_ml))
                 .slice(0, 6)
                 .map((row) => (
                   <li
@@ -324,28 +325,28 @@ export default async function DashboardPage({
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-ink">{row.sauce_name}</p>
                       <p className="text-2xs text-ink-subtle">
-                        {formatShort(row.prep_date)} · planned {row.planned_bags}, made{' '}
-                        {row.actual_bags}
+                        {formatShort(row.prep_date)} · planned {formatMl(row.planned_ml)}, made{' '}
+                        {formatMl(row.actual_ml)}
                       </p>
                     </div>
                     <Badge
                       size="sm"
                       tone={
-                        row.variance === 0
+                        row.variance_ml === 0
                           ? 'success'
-                          : Math.abs(row.variance) >= 5
+                          : Math.abs(row.variance_ml) >= 500
                             ? 'danger'
                             : 'warning'
                       }
                       icon={
-                        row.variance === 0
+                        row.variance_ml === 0
                           ? 'check'
-                          : row.variance > 0
+                          : row.variance_ml > 0
                             ? 'trending-up'
                             : 'trending-down'
                       }
                     >
-                      {row.variance > 0 ? `+${row.variance}` : row.variance}
+                      {row.variance_ml > 0 ? `+${formatMl(row.variance_ml)}` : formatMl(row.variance_ml)}
                     </Badge>
                   </li>
                 ))}
@@ -399,8 +400,8 @@ export default async function DashboardPage({
               >
                 <p className="text-sm font-semibold text-danger-on-soft">{forecast.sauceName}</p>
                 <p className="mt-1 text-xs text-danger-on-soft/85">
-                  {site} · {forecast.usableStock} left, using{' '}
-                  {forecast.reasoning.burnRatePerDay}/day
+                  {site} · {formatMl(forecast.usableStockMl)} left, using{' '}
+                  {formatMl(forecast.reasoning.burnRatePerDay)}/day
                 </p>
               </li>
             ))}

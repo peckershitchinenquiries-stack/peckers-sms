@@ -29,7 +29,7 @@ export interface TrackedBag {
   sauceName: string
   siteId: string
   siteName: string
-  bagSize: '1L' | '2L'
+  sizeMl: number
   prepDate: DateOnly
   status: BagStatus
   sealedExpiry: DateOnly
@@ -45,7 +45,7 @@ interface BagJoinRow {
   id: string
   sauce_id: string
   site_id: string
-  bag_size: '1L' | '2L'
+  size_ml: number
   prep_date: string
   status: BagStatus
   sealed_expiry: string
@@ -89,7 +89,7 @@ export async function getTrackedBags(options: BagQueryOptions): Promise<TrackedB
   let query = supabase
     .from('bags')
     .select(
-      'id, sauce_id, site_id, bag_size, prep_date, status, sealed_expiry, opened_at, opened_expiry, used_at, discarded_at, sauces(name), sites(name)',
+      'id, sauce_id, site_id, size_ml, prep_date, status, sealed_expiry, opened_at, opened_expiry, used_at, discarded_at, sauces(name), sites(name)',
     )
     .in('status', statuses)
     .order('prep_date', { ascending: false })
@@ -114,7 +114,7 @@ export async function getTrackedBags(options: BagQueryOptions): Promise<TrackedB
       sauceName: row.sauces?.name ?? 'Unknown sauce',
       siteId: row.site_id,
       siteName: row.sites?.name ?? 'Unknown site',
-      bagSize: row.bag_size,
+      sizeMl: row.size_ml,
       prepDate: row.prep_date,
       status: row.status,
       sealedExpiry: row.sealed_expiry,
@@ -163,7 +163,7 @@ export async function getUseTodayBags(siteId: string | null): Promise<TrackedBag
   return bags.filter((bag) => bag.daysRemaining <= 2)
 }
 
-/** Rolling daily burn rate per sauce, for the dashboard and alerts. */
+/** Rolling daily burn rate (ml/day) per sauce, for the dashboard and alerts. */
 export async function getBurnRates(
   siteId: string | null,
   windowDays = 28,
@@ -173,20 +173,20 @@ export async function getBurnRates(
 
   let query = supabase
     .from('usage_logs')
-    .select('sauce_id, bags_opened, usage_date')
+    .select('sauce_id, ml_used, usage_date')
     .gte('usage_date', addDaysTo(asOf, -(windowDays - 1)))
     .lte('usage_date', asOf)
 
   if (siteId) query = query.eq('site_id', siteId)
 
   const { data, error } = await query.returns<
-    Array<{ sauce_id: string; bags_opened: number; usage_date: string }>
+    Array<{ sauce_id: string; ml_used: number; usage_date: string }>
   >()
   if (error) throw new Error(`Loading burn rates: ${error.message}`)
 
   const totals = new Map<string, number>()
   for (const row of data ?? []) {
-    totals.set(row.sauce_id, (totals.get(row.sauce_id) ?? 0) + row.bags_opened)
+    totals.set(row.sauce_id, (totals.get(row.sauce_id) ?? 0) + row.ml_used)
   }
 
   const rates = new Map<string, number>()

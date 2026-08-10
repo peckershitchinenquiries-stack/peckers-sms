@@ -53,7 +53,7 @@ export async function getUsageLogs(options: {
   }))
 }
 
-/** Today's logged usage keyed by sauce, for the "already logged" indicator. */
+/** Today's logged usage (ml) keyed by sauce, for the "already logged" indicator. */
 export async function getUsageForDate(
   siteId: string,
   date: DateOnly = today(),
@@ -61,34 +61,34 @@ export async function getUsageForDate(
   const supabase = createServerSupabase()
   const { data, error } = await supabase
     .from('usage_logs')
-    .select('sauce_id, bags_opened')
+    .select('sauce_id, ml_used')
     .eq('site_id', siteId)
     .eq('usage_date', date)
-    .returns<Array<{ sauce_id: string; bags_opened: number }>>()
+    .returns<Array<{ sauce_id: string; ml_used: number }>>()
   if (error) throw new Error(`Loading today's usage: ${error.message}`)
 
-  return new Map((data ?? []).map((row) => [row.sauce_id, row.bags_opened]))
+  return new Map((data ?? []).map((row) => [row.sauce_id, row.ml_used]))
 }
 
-/** Daily totals across a window — powers the usage sparkline. */
+/** Daily totals (ml) across a window — powers the usage sparkline. */
 export async function getDailyUsageTotals(
   siteId: string | null,
   windowDays = 14,
-): Promise<Array<{ date: DateOnly; bags: number }>> {
+): Promise<Array<{ date: DateOnly; ml: number }>> {
   const supabase = createServerSupabase()
   const asOf = today()
   const from = addDaysTo(asOf, -(windowDays - 1))
 
   let query = supabase
     .from('usage_logs')
-    .select('usage_date, bags_opened')
+    .select('usage_date, ml_used')
     .gte('usage_date', from)
     .lte('usage_date', asOf)
 
   if (siteId) query = query.eq('site_id', siteId)
 
   const { data, error } = await query.returns<
-    Array<{ usage_date: string; bags_opened: number }>
+    Array<{ usage_date: string; ml_used: number }>
   >()
   if (error) throw new Error(`Loading usage totals: ${error.message}`)
 
@@ -97,10 +97,10 @@ export async function getDailyUsageTotals(
     totals.set(addDaysTo(from, offset), 0)
   }
   for (const row of data ?? []) {
-    totals.set(row.usage_date, (totals.get(row.usage_date) ?? 0) + row.bags_opened)
+    totals.set(row.usage_date, (totals.get(row.usage_date) ?? 0) + row.ml_used)
   }
 
-  return Array.from(totals.entries()).map(([date, bags]) => ({ date, bags }))
+  return Array.from(totals.entries()).map(([date, ml]) => ({ date, ml }))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -112,10 +112,12 @@ export interface BatchRow {
   sauceName: string
   siteId: string
   siteName: string
-  bagSize: '1L' | '2L'
+  /** Bag size (ml) -> how many of that size were made in this batch. */
+  sizes: Record<number, number>
   prepDate: DateOnly
   sessionId: string | null
   totalBags: number
+  totalMl: number
   sealed: number
   opened: number
   used: number
@@ -140,7 +142,7 @@ export async function getBatchHistory(options: {
   let query = supabase
     .from('bags')
     .select(
-      'id, sauce_id, site_id, bag_size, prep_date, sealed_expiry, status, prep_session_id, sauces(name), sites(name)',
+      'id, sauce_id, site_id, size_ml, prep_date, sealed_expiry, status, prep_session_id, sauces(name), sites(name)',
     )
     .order('prep_date', { ascending: false })
     .limit(options.limit ?? 4000)
@@ -157,7 +159,7 @@ export async function getBatchHistory(options: {
         | 'id'
         | 'sauce_id'
         | 'site_id'
-        | 'bag_size'
+        | 'size_ml'
         | 'prep_date'
         | 'sealed_expiry'
         | 'status'
@@ -179,10 +181,11 @@ export async function getBatchHistory(options: {
         sauceName: bag.sauces?.name ?? 'Unknown sauce',
         siteId: bag.site_id,
         siteName: bag.sites?.name ?? 'Unknown site',
-        bagSize: bag.bag_size,
+        sizes: {},
         prepDate: bag.prep_date,
         sessionId: bag.prep_session_id,
         totalBags: 0,
+        totalMl: 0,
         sealed: 0,
         opened: 0,
         used: 0,
@@ -193,6 +196,8 @@ export async function getBatchHistory(options: {
     }
 
     row.totalBags += 1
+    row.totalMl += bag.size_ml
+    row.sizes[bag.size_ml] = (row.sizes[bag.size_ml] ?? 0) + 1
     if (bag.status === 'sealed') row.sealed += 1
     else if (bag.status === 'opened') row.opened += 1
     else if (bag.status === 'used') row.used += 1

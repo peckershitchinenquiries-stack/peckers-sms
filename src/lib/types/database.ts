@@ -5,8 +5,9 @@
  *   npx supabase gen types typescript --project-id <ref> --schema public
  */
 
+import type { PackResult } from '@/lib/forecast/packing'
+
 export type UserRole = 'manager' | 'staff'
-export type BagSizeValue = '1L' | '2L'
 export type PrepTypeValue = 'tuesday' | 'friday'
 export type PlanStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled'
 export type BagStatus = 'sealed' | 'opened' | 'used' | 'discarded'
@@ -37,7 +38,6 @@ export interface Sauce {
   id: string
   name: string
   slug: string
-  bag_size: BagSizeValue
   active: boolean
   sort_order: number
   introduced_on: string
@@ -49,7 +49,7 @@ export interface ParLevel {
   id: string
   sauce_id: string
   site_id: string
-  target_bags: number
+  target_ml: number
   created_at: string
   updated_at: string
 }
@@ -71,8 +71,8 @@ export interface PrepPlanItem {
   id: string
   plan_id: string
   sauce_id: string
-  suggested_bags: number
-  override_bags: number | null
+  suggested_ml: number
+  override_ml: number | null
   reasoning: ForecastReasoning | Record<string, never>
   created_at: string
   updated_at: string
@@ -95,7 +95,7 @@ export interface PrepChecklistRow {
   id: string
   session_id: string
   sauce_id: string
-  planned_bags: number
+  planned_ml: number
   cooked_at: string | null
   blast_chilled_at: string | null
   vacuum_packed_at: string | null
@@ -108,7 +108,7 @@ export interface Bag {
   sauce_id: string
   site_id: string
   prep_session_id: string | null
-  bag_size: BagSizeValue
+  size_ml: number
   prep_date: string
   sealed_expiry: string
   status: BagStatus
@@ -127,7 +127,7 @@ export interface UsageLog {
   site_id: string
   sauce_id: string
   usage_date: string
-  bags_opened: number
+  ml_used: number
   notes: string | null
   logged_by: string | null
   created_at: string
@@ -165,6 +165,8 @@ export interface AppSettings {
   low_stock_alerts_enabled: boolean
   forecast_buffer: number
   forecast_window_days: number
+  /** The bag sizes (ml) available when packing a batch. Default 300/500/1000/2000. */
+  bag_sizes_ml: number[]
   updated_at: string
 }
 
@@ -177,7 +179,7 @@ export interface BagExpiryRow {
   sauce_id: string
   site_id: string
   prep_session_id: string | null
-  bag_size: BagSizeValue
+  size_ml: number
   prep_date: string
   status: BagStatus
   sealed_expiry: string
@@ -193,12 +195,14 @@ export interface LiveStockRow {
   sauce_id: string
   site_id: string
   sauce_name: string
-  bag_size: BagSizeValue
   site_name: string
-  par_level: number
+  par_level_ml: number
   sealed_bags: number
   opened_bags: number
   usable_bags: number
+  sealed_ml: number
+  opened_ml: number
+  usable_ml: number
   expiring_today: number
   expiring_soon: number
 }
@@ -224,12 +228,12 @@ export interface PrepVsPlanRow {
   status: PlanStatus
   sauce_id: string
   sauce_name: string
-  bag_size: BagSizeValue
-  planned_bags: number
-  suggested_bags: number
-  override_bags: number | null
+  planned_ml: number
+  suggested_ml: number
+  override_ml: number | null
   actual_bags: number
-  variance: number
+  actual_ml: number
+  variance_ml: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -239,40 +243,45 @@ export interface PrepVsPlanRow {
 export interface ForecastInputRow {
   sauce_id: string
   sauce_name: string
-  bag_size: BagSizeValue
   introduced_on: string
-  par_level: number
+  par_level_ml: number
   usable_bags: number
   sealed_bags: number
   opened_bags: number
-  usage: Array<{ date: string; bags: number }>
+  usable_ml: number
+  sealed_ml: number
+  opened_ml: number
+  usage: Array<{ date: string; ml: number }>
 }
 
-export interface OpenBagsResult {
-  requested: number
-  opened: number
-  shortfall: number
-  usage_total?: number
+export interface OpenStockResult {
+  requested_ml: number
+  opened_ml: number
+  opened_bags: number
+  shortfall_ml: number
+  usage_total_ml?: number
 }
 
 /**
- * The forecast engine's full working, stored on each plan item so the UI can
- * show exactly why a number was suggested.
+ * The forecast engine's full working, stored on each plan item so the number
+ * is never a black box.
  */
 export interface ForecastReasoning {
   method: 'history' | 'par_fallback' | 'partial_history'
   confidence: 'high' | 'medium' | 'low'
+  /** ml/day. */
   burnRatePerDay: number
   observedDays: number
-  totalBagsUsed: number
+  totalMlUsed: number
   weekdayMultipliers: Record<string, number>
   coverageDates: Array<{ date: string; weekday: string; multiplier: number; projected: number }>
-  projectedNeed: number
-  usableStock: number
+  projectedNeedMl: number
+  usableStockMl: number
   bufferMultiplier: number
-  parLevel: number
+  parLevelMl: number
   parFloorApplied: boolean
-  rawSuggestion: number
-  suggestedBags: number
+  rawSuggestionMl: number
+  suggestedMl: number
+  pack: PackResult
   notes: string[]
 }

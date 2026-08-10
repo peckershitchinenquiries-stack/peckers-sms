@@ -18,7 +18,7 @@ import {
   Stepper,
   useToast,
 } from '@/components/ui'
-import { BagSizeBadge } from '@/components/app/StatusPills'
+import { PackBadge } from '@/components/app/StatusPills'
 import {
   addChecklistSauce,
   endPrepSession,
@@ -36,6 +36,8 @@ import {
   type DateOnly,
 } from '@/lib/date'
 import { motion as motionTokens } from '@/lib/design/tokens'
+import { packVolume } from '@/lib/forecast/packing'
+import { formatMl } from '@/lib/utils/volume'
 import type { ChecklistEntry, PlanView, SessionView } from '@/lib/queries/planning'
 import type { Site } from '@/lib/types/database'
 
@@ -48,8 +50,9 @@ export interface PrepChecklistProps {
   isToday: boolean
   session: SessionView | null
   plan: PlanView | null
-  sauces: Array<{ id: string; name: string; bagSize: '1L' | '2L' }>
+  sauces: Array<{ id: string; name: string }>
   canManageSite: boolean
+  bagSizesMl: number[]
 }
 
 export function PrepChecklist({
@@ -63,6 +66,7 @@ export function PrepChecklist({
   plan,
   sauces,
   canManageSite,
+  bagSizesMl,
 }: PrepChecklistProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -71,7 +75,7 @@ export function PrepChecklist({
   const [busy, startTransition] = React.useTransition()
   const [addOpen, setAddOpen] = React.useState(false)
   const [newSauceId, setNewSauceId] = React.useState<string | null>(null)
-  const [newQuantity, setNewQuantity] = React.useState(4)
+  const [newQuantity, setNewQuantity] = React.useState(2000)
 
   // Memoised so the progress useMemo below has a stable dependency.
   const entries = React.useMemo(() => session?.entries ?? [], [session])
@@ -82,7 +86,8 @@ export function PrepChecklist({
     const chilled = entries.filter((entry) => entry.blast_chilled_at).length
     const cooked = entries.filter((entry) => entry.cooked_at).length
     const bags = entries.reduce((sum, entry) => sum + entry.bagsCreated, 0)
-    return { total, packed, chilled, cooked, bags }
+    const ml = entries.reduce((sum, entry) => sum + entry.mlCreated, 0)
+    return { total, packed, chilled, cooked, bags, ml }
   }, [entries])
 
   const changeSite = (nextSiteId: string) => {
@@ -224,18 +229,17 @@ export function PrepChecklist({
           <StatCard label="Cooked" value={progress.cooked} unit={`of ${progress.total}`} icon="flame" tone="warning" />
           <StatCard label="Chilled" value={progress.chilled} unit={`of ${progress.total}`} icon="snowflake" tone="brand" />
           <StatCard
-            label="Bags made"
-            value={progress.bags}
-            unit="bags"
+            label="Volume packed"
+            value={formatMl(progress.ml)}
             icon="package"
             tone="success"
-            hint={`Expire ${formatShort(sealedExpiryFor(prepDate))}`}
+            hint={`${progress.bags} bags · expire ${formatShort(sealedExpiryFor(prepDate))}`}
           />
         </div>
       ) : null}
 
       {!session && plan ? (
-        <Callout tone="info" title={`${plan.totalBags} bags planned for this prep day`}>
+        <Callout tone="info" title={`${formatMl(plan.totalMl)} planned for this prep day`}>
           Press <strong>Start prep session</strong> to clock in and load the checklist. Your start
           time is what the overtime log is built from.
         </Callout>
@@ -276,6 +280,7 @@ export function PrepChecklist({
                   sessionId={session.session.id}
                   siteId={siteId}
                   prepDate={prepDate}
+                  bagSizesMl={bagSizesMl}
                   disabled={Boolean(session.session.ended_at)}
                 />
               ))}
@@ -295,21 +300,23 @@ export function PrepChecklist({
           {plan && plan.items.length > 0 ? (
             <ul className="divide-y divide-border">
               {plan.items
-                .filter((item) => item.finalBags > 0)
+                .filter((item) => item.finalMl > 0)
                 .map((item) => (
                   <li key={item.id} className="flex items-center justify-between gap-4 px-5 py-3.5">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-ink">{item.sauceName}</span>
-                      <BagSizeBadge size={item.bagSize} />
-                      {item.overrideBags !== null && item.overrideBags !== item.suggestedBags ? (
+                      {item.overrideMl !== null && item.overrideMl !== item.suggestedMl ? (
                         <Badge tone="brand" size="sm" icon="edit">
                           overridden
                         </Badge>
                       ) : null}
                     </div>
-                    <span className="text-sm font-semibold tabular-nums text-ink">
-                      {item.finalBags} bags
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <PackBadge counts={item.pack.counts} />
+                      <span className="text-sm font-semibold tabular-nums text-ink">
+                        {formatMl(item.finalMl)}
+                      </span>
+                    </div>
                   </li>
                 ))}
             </ul>
@@ -345,7 +352,7 @@ export function PrepChecklist({
                   const result = await addChecklistSauce({
                     sessionId: session.session.id,
                     sauceId: newSauceId,
-                    plannedBags: newQuantity,
+                    plannedMl: newQuantity,
                   })
                   if (result.ok) {
                     toast({ tone: 'success', title: 'Added to the checklist' })
@@ -371,13 +378,17 @@ export function PrepChecklist({
             placeholder="Choose a sauce"
             options={sauces
               .filter((sauce) => !entries.some((entry) => entry.sauce_id === sauce.id))
-              .map((sauce) => ({
-                value: sauce.id,
-                label: sauce.name,
-                description: `${sauce.bagSize} bags`,
-              }))}
+              .map((sauce) => ({ value: sauce.id, label: sauce.name }))}
           />
-          <Stepper label="Bags to make" value={newQuantity} onChange={setNewQuantity} unit="bags" />
+          <Stepper
+            label="Volume needed"
+            value={newQuantity}
+            onChange={setNewQuantity}
+            min={0}
+            max={100_000}
+            step={100}
+            unit="ml"
+          />
         </div>
       </Modal>
     </div>
@@ -394,6 +405,7 @@ function ChecklistCard({
   sessionId,
   siteId,
   prepDate,
+  bagSizesMl,
   disabled,
 }: {
   entry: ChecklistEntry
@@ -401,16 +413,19 @@ function ChecklistCard({
   sessionId: string
   siteId: string
   prepDate: DateOnly
+  bagSizesMl: number[]
   disabled: boolean
 }) {
   const router = useRouter()
   const { toast } = useToast()
   const [busy, startTransition] = React.useTransition()
-  const [quantity, setQuantity] = React.useState(entry.planned_bags)
+  const [quantity, setQuantity] = React.useState(entry.planned_ml)
+  const [packOpen, setPackOpen] = React.useState(false)
 
   const cooked = Boolean(entry.cooked_at)
   const chilling = Boolean(entry.blast_chilled_at)
   const packed = Boolean(entry.vacuum_packed_at)
+  const suggestedPack = React.useMemo(() => packVolume(quantity, bagSizesMl), [quantity, bagSizesMl])
 
   const toggle = (step: 'cooked_at' | 'blast_chilled_at', done: boolean) => {
     startTransition(async () => {
@@ -427,29 +442,6 @@ function ChecklistCard({
         })
       }
       router.refresh()
-    })
-  }
-
-  const pack = () => {
-    startTransition(async () => {
-      const result = await completeVacuumPack({
-        checklistId: entry.id,
-        sessionId,
-        sauceId: entry.sauce_id,
-        siteId,
-        prepDate,
-        quantity,
-      })
-      if (result.ok) {
-        toast({
-          tone: 'success',
-          title: `${quantity} bags of ${entry.sauceName} packed`,
-          description: `Each bag expires ${formatShort(sealedExpiryFor(prepDate))}.`,
-        })
-        router.refresh()
-      } else {
-        toast({ tone: 'danger', title: 'Could not pack', description: result.error })
-      }
     })
   }
 
@@ -481,14 +473,11 @@ function ChecklistCard({
               <Icon name={packed ? 'check' : 'chef-hat'} size={20} />
             </span>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="truncate text-base font-semibold text-ink">{entry.sauceName}</h3>
-                <BagSizeBadge size={entry.bagSize} />
-              </div>
+              <h3 className="truncate text-base font-semibold text-ink">{entry.sauceName}</h3>
               <p className="mt-0.5 text-xs text-ink-muted">
                 {packed
-                  ? `${entry.bagsCreated} bags packed at ${formatTimeOfDay(entry.vacuum_packed_at!)}`
-                  : `${entry.planned_bags} bags planned`}
+                  ? `${formatMl(entry.mlCreated)} (${entry.bagsCreated} bags) packed at ${formatTimeOfDay(entry.vacuum_packed_at!)}`
+                  : `${formatMl(entry.planned_ml)} planned`}
               </p>
             </div>
           </div>
@@ -523,28 +512,29 @@ function ChecklistCard({
                 Vacuum packed
               </span>
             ) : (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Stepper
                   size="sm"
                   value={quantity}
                   onChange={(value) => {
                     setQuantity(value)
                     startTransition(async () => {
-                      await setChecklistQuantity({ checklistId: entry.id, plannedBags: value })
+                      await setChecklistQuantity({ checklistId: entry.id, plannedMl: value })
                     })
                   }}
                   min={0}
-                  max={500}
+                  max={100_000}
+                  step={100}
+                  unit="ml"
                   disabled={disabled}
                 />
                 <Button
                   size="lg"
                   leadingIcon="package"
                   disabled={disabled || !chilling || quantity < 1}
-                  loading={busy}
-                  onClick={pack}
+                  onClick={() => setPackOpen(true)}
                 >
-                  Pack {quantity}
+                  Pack {suggestedPack.totalBags} bag{suggestedPack.totalBags === 1 ? '' : 's'}
                 </Button>
               </div>
             )}
@@ -575,6 +565,38 @@ function ChecklistCard({
           ) : null}
         </AnimatePresence>
       </Card>
+
+      <PackModal
+        open={packOpen}
+        onClose={() => setPackOpen(false)}
+        sauceName={entry.sauceName}
+        targetMl={quantity}
+        bagSizesMl={bagSizesMl}
+        onConfirm={(pack) => {
+          startTransition(async () => {
+            const result = await completeVacuumPack({
+              checklistId: entry.id,
+              sessionId,
+              sauceId: entry.sauce_id,
+              siteId,
+              prepDate,
+              pack,
+            })
+            if (result.ok) {
+              toast({
+                tone: 'success',
+                title: `${entry.sauceName} packed`,
+                description: `${formatMl(result.data!.createdMl)} sealed — each bag expires ${formatShort(sealedExpiryFor(prepDate))}.`,
+              })
+              setPackOpen(false)
+              router.refresh()
+            } else {
+              toast({ tone: 'danger', title: 'Could not pack', description: result.error })
+            }
+          })
+        }}
+        busy={busy}
+      />
     </motion.li>
   )
 }
@@ -616,5 +638,111 @@ function StepButton({
         ) : null}
       </span>
     </button>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pack modal — confirm (or hand-adjust) the bag-size breakdown               */
+/* -------------------------------------------------------------------------- */
+
+function PackModal({
+  open,
+  onClose,
+  sauceName,
+  targetMl,
+  bagSizesMl,
+  onConfirm,
+  busy,
+}: {
+  open: boolean
+  onClose: () => void
+  sauceName: string
+  targetMl: number
+  bagSizesMl: number[]
+  onConfirm: (pack: Record<number, number>) => void
+  busy: boolean
+}) {
+  const [pack, setPack] = React.useState<Record<number, number>>({})
+
+  // Re-seed with the least-wasteful suggestion each time the modal opens.
+  React.useEffect(() => {
+    if (open) setPack(packVolume(targetMl, bagSizesMl).counts)
+  }, [open, targetMl, bagSizesMl])
+
+  const totalMl = Object.entries(pack).reduce((sum, [size, count]) => sum + Number(size) * count, 0)
+  const totalBags = Object.values(pack).reduce((sum, count) => sum + count, 0)
+  const wasteMl = totalMl - targetMl
+
+  const setCount = (size: number, count: number) => {
+    setPack((current) => ({ ...current, [size]: Math.max(0, count) }))
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Pack ${sauceName}`}
+      description={`Needs ${formatMl(targetMl)}. Adjust the mix below if you're short on a size today.`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button loading={busy} disabled={totalBags < 1} onClick={() => onConfirm(pack)}>
+            Confirm {totalBags} bag{totalBags === 1 ? '' : 's'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {bagSizesMl.map((size) => {
+            const count = pack[size] ?? 0
+            return (
+              <div
+                key={size}
+                className="flex items-center overflow-hidden rounded-lg border border-border bg-surface"
+              >
+                <button
+                  type="button"
+                  disabled={count <= 0}
+                  onClick={() => setCount(size, count - 1)}
+                  aria-label={`Fewer ${size}ml bags`}
+                  className="grid h-10 w-8 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+                >
+                  <Icon name="minus" size={13} />
+                </button>
+                <span className="w-16 text-center text-sm font-medium tabular-nums text-ink">
+                  {count} × {size}ml
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCount(size, count + 1)}
+                  aria-label={`More ${size}ml bags`}
+                  className="grid h-10 w-8 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
+                >
+                  <Icon name="plus" size={13} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg bg-surface-sunken px-3.5 py-2.5 text-sm">
+          <span className="text-ink-muted">Total</span>
+          <span className="font-semibold tabular-nums text-ink">
+            {formatMl(totalMl)}
+            {wasteMl !== 0 ? (
+              <span className={wasteMl > 0 ? 'text-warning' : 'text-danger'}>
+                {' '}
+                ({wasteMl > 0 ? '+' : ''}
+                {formatMl(wasteMl)})
+              </span>
+            ) : null}
+          </span>
+        </div>
+      </div>
+    </Modal>
   )
 }

@@ -18,7 +18,7 @@ import {
   Tooltip,
   useToast,
 } from '@/components/ui'
-import { BagSizeBadge, StockBadge } from '@/components/app/StatusPills'
+import { StockBadge } from '@/components/app/StatusPills'
 import { recordUsage } from '@/lib/actions/usage'
 import {
   daysUntilNextPrep,
@@ -31,6 +31,7 @@ import {
   type DateOnly,
 } from '@/lib/date'
 import { motion as motionTokens } from '@/lib/design/tokens'
+import { formatMl } from '@/lib/utils/volume'
 import type { UsageEntry } from '@/lib/queries/activity'
 import type { LiveStockRow } from '@/lib/types/database'
 
@@ -42,7 +43,7 @@ export interface UsageLoggerProps {
   burnRates: Record<string, number>
   loggedToday: Record<string, number>
   recent: UsageEntry[]
-  dailyTotals: Array<{ date: DateOnly; bags: number }>
+  dailyTotals: Array<{ date: DateOnly; ml: number }>
   isManager: boolean
 }
 
@@ -77,10 +78,13 @@ export function UsageLogger({
       if (siteId && row.site_id !== siteId) continue
       const existing = bySauce.get(row.sauce_id)
       if (existing) {
+        existing.usable_ml += row.usable_ml
+        existing.sealed_ml += row.sealed_ml
+        existing.opened_ml += row.opened_ml
         existing.usable_bags += row.usable_bags
         existing.sealed_bags += row.sealed_bags
         existing.opened_bags += row.opened_bags
-        existing.par_level += row.par_level
+        existing.par_level_ml += row.par_level_ml
         continue
       }
       bySauce.set(row.sauce_id, {
@@ -94,27 +98,27 @@ export function UsageLogger({
   }, [stock, siteId, burnRates, loggedToday])
 
   const totals = React.useMemo(() => {
-    const loggedBags = Object.values(loggedToday).reduce((sum, value) => sum + value, 0)
+    const loggedMl = Object.values(loggedToday).reduce((sum, value) => sum + value, 0)
     const atRisk = rows.filter(
-      (row) => row.burnRate > 0 && row.usable_bags < row.burnRate * daysToRestock,
+      (row) => row.burnRate > 0 && row.usable_ml < row.burnRate * daysToRestock,
     ).length
     return {
-      loggedBags,
+      loggedMl,
       loggedSauces: Object.keys(loggedToday).length,
       atRisk,
-      totalStock: rows.reduce((sum, row) => sum + row.usable_bags, 0),
+      totalStockMl: rows.reduce((sum, row) => sum + row.usable_ml, 0),
     }
   }, [loggedToday, rows, daysToRestock])
 
-  const peakDaily = Math.max(...dailyTotals.map((day) => day.bags), 1)
+  const peakDaily = Math.max(...dailyTotals.map((day) => day.ml), 1)
 
   const submit = (sauceId: string, sauceName: string) => {
-    const bags = quantities[sauceId] ?? 0
-    if (bags < 1) return
+    const ml = quantities[sauceId] ?? 0
+    if (ml < 1) return
 
     setPendingSauce(sauceId)
     startTransition(async () => {
-      const result = await recordUsage({ sauceId, bags, siteId: siteId ?? undefined })
+      const result = await recordUsage({ sauceId, ml, siteId: siteId ?? undefined })
       setPendingSauce(null)
 
       if (!result.ok) {
@@ -122,13 +126,13 @@ export function UsageLogger({
         return
       }
 
-      const shortfall = result.data?.shortfall ?? 0
+      const shortfallMl = result.data?.shortfall_ml ?? 0
       toast({
-        tone: shortfall > 0 ? 'warning' : 'success',
-        title: `${bags} bag${bags === 1 ? '' : 's'} of ${sauceName} logged`,
+        tone: shortfallMl > 0 ? 'warning' : 'success',
+        title: `${formatMl(ml)} of ${sauceName} logged`,
         description:
-          shortfall > 0
-            ? `Only ${result.data?.opened} sealed bags were available — ${shortfall} more were used than the system had recorded. Check the batch log.`
+          shortfallMl > 0
+            ? `Only ${formatMl(result.data?.opened_ml ?? 0)} of sealed stock was available — ${formatMl(shortfallMl)} more was used than the system had recorded. Check the batch log.`
             : 'Each opened bag now has 2 days of life, capped at its sealed date.',
       })
 
@@ -152,16 +156,14 @@ export function UsageLogger({
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Logged today"
-          value={totals.loggedBags}
-          unit="bags"
+          value={formatMl(totals.loggedMl)}
           icon="clipboard-list"
           tone="brand"
           hint={`${totals.loggedSauces} sauce${totals.loggedSauces === 1 ? '' : 's'} recorded`}
         />
         <StatCard
           label="Live stock"
-          value={totals.totalStock}
-          unit="bags"
+          value={formatMl(totals.totalStockMl)}
           icon="package"
           tone="neutral"
           hint={siteName}
@@ -200,8 +202,8 @@ export function UsageLogger({
             <CardHeader
               className="mb-0"
               eyebrow={formatRelativeDay(asOf)}
-              title={`Bags opened at ${siteName}`}
-              description="Tap the stepper, then Log. Logging the same sauce twice adds to the day's total rather than replacing it."
+              title={`Volume used at ${siteName}`}
+              description="Enter the ml used, then Log. Logging the same sauce twice adds to the day's total rather than replacing it."
             />
           </div>
 
@@ -215,7 +217,7 @@ export function UsageLogger({
             <ul className="divide-y divide-border">
               {rows.map((row, index) => {
                 const willRunOut =
-                  row.burnRate > 0 && row.usable_bags < row.burnRate * daysToRestock
+                  row.burnRate > 0 && row.usable_ml < row.burnRate * daysToRestock
                 const quantity = quantities[row.sauce_id] ?? 0
 
                 return (
@@ -232,14 +234,13 @@ export function UsageLogger({
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-ink">{row.sauce_name}</span>
-                        <BagSizeBadge size={row.bag_size} />
                         {row.logged > 0 ? (
                           <Badge tone="success" size="sm" icon="check">
-                            {row.logged} today
+                            {formatMl(row.logged)} today
                           </Badge>
                         ) : null}
                         {willRunOut ? (
-                          <Tooltip content={`Using ~${row.burnRate}/day with ${daysToRestock} days until restock.`}>
+                          <Tooltip content={`Using ~${formatMl(row.burnRate)}/day with ${daysToRestock} days until restock.`}>
                             <span>
                               <Badge tone="danger" size="sm" icon="trending-down">
                                 short
@@ -250,23 +251,23 @@ export function UsageLogger({
                       </div>
 
                       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
-                        <StockBadge usable={row.usable_bags} par={row.par_level} size="sm" />
+                        <StockBadge usable={row.usable_ml} par={row.par_level_ml} size="sm" />
                         <span>
                           {row.sealed_bags} sealed · {row.opened_bags} open
                         </span>
-                        <span>~{row.burnRate} bags/day</span>
+                        <span>~{formatMl(row.burnRate)}/day</span>
                       </div>
 
                       <ProgressBar
                         className="mt-2.5 max-w-sm"
                         size="sm"
-                        value={row.usable_bags}
-                        max={Math.max(row.par_level, row.usable_bags, 1)}
-                        marker={row.par_level > 0 ? row.par_level : undefined}
+                        value={row.usable_ml}
+                        max={Math.max(row.par_level_ml, row.usable_ml, 1)}
+                        marker={row.par_level_ml > 0 ? row.par_level_ml : undefined}
                         tone={
                           willRunOut
                             ? 'danger'
-                            : row.par_level > 0 && row.usable_bags < row.par_level * 0.6
+                            : row.par_level_ml > 0 && row.usable_ml < row.par_level_ml * 0.6
                               ? 'warning'
                               : 'success'
                         }
@@ -280,8 +281,9 @@ export function UsageLogger({
                           setQuantities((current) => ({ ...current, [row.sauce_id]: value }))
                         }
                         min={0}
-                        max={200}
-                        unit="bags"
+                        max={50_000}
+                        step={100}
+                        unit="ml"
                       />
                       <Button
                         size="lg"
@@ -304,17 +306,27 @@ export function UsageLogger({
           <Card>
             <CardHeader
               eyebrow="Last 14 days"
-              title="Bags opened per day"
+              title="Volume used per day"
               description="The shape of demand — weekends and Fridays usually run hottest."
             />
             <div className="flex h-40 items-end gap-1.5">
-              {dailyTotals.map((day) => (
+              {dailyTotals.map((day, index) => (
                 <div key={day.date} className="flex flex-1 flex-col items-center gap-1.5">
-                  <Tooltip content={`${day.bags} bags on ${formatShort(day.date)}`}>
+                  <Tooltip
+                    content={
+                      <>
+                        <strong>{formatMl(day.ml)}</strong> on {formatShort(day.date)}
+                      </>
+                    }
+                  >
                     <motion.div
                       initial={{ height: 0 }}
-                      animate={{ height: `${Math.max((day.bags / peakDaily) * 100, 3)}%` }}
-                      transition={{ duration: motionTokens.duration.slower, ease: motionTokens.ease.out }}
+                      animate={{ height: `${Math.max((day.ml / peakDaily) * 100, 3)}%` }}
+                      transition={{
+                        delay: index * 0.02,
+                        duration: motionTokens.duration.slower,
+                        ease: motionTokens.ease.out,
+                      }}
                       className={`w-full rounded-t-md ${
                         day.date === asOf ? 'bg-brand' : 'bg-brand/35'
                       }`}
@@ -336,7 +348,7 @@ export function UsageLogger({
             empty={{
               icon: 'clipboard-list',
               title: 'No usage logged yet',
-              description: 'Switch to “Log today’s usage” and record the first bags of the day.',
+              description: 'Switch to “Log today’s usage” and record the first volume of the day.',
             }}
             columns={[
               {
@@ -372,10 +384,10 @@ export function UsageLogger({
                   ]
                 : []),
               {
-                key: 'bags',
-                header: 'Bags opened',
+                key: 'ml',
+                header: 'Volume used',
                 align: 'right',
-                cell: (row) => <span className="font-semibold text-ink">{row.bags_opened}</span>,
+                cell: (row) => <span className="font-semibold text-ink">{formatMl(row.ml_used)}</span>,
               },
               ...(isManager
                 ? [
@@ -396,3 +408,4 @@ export function UsageLogger({
     </div>
   )
 }
+
