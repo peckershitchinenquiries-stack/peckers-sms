@@ -62,13 +62,25 @@ export async function logBatch(input: {
     })
     if (error) throw new Error(error.message)
 
+    // The trigger is the source of truth for the actual shelf life; this
+    // mirrors it so the returned estimate matches the sauce's own days.
+    const { data: sauce } = await supabase
+      .from('sauces')
+      .select('sealed_shelf_life_days')
+      .eq('id', input.sauceId)
+      .maybeSingle<{ sealed_shelf_life_days: number }>()
+
     revalidatePath('/batches')
     revalidatePath('/expiry')
     revalidatePath('/prep')
     revalidatePath('/dashboard')
     revalidatePath('/today')
 
-    return ok({ created: totalBags, createdMl: totalMl, sealedExpiry: sealedExpiryFor(prepDate) })
+    return ok({
+      created: totalBags,
+      createdMl: totalMl,
+      sealedExpiry: sealedExpiryFor(prepDate, sauce?.sealed_shelf_life_days),
+    })
   } catch (error) {
     return fail(error, 'Could not log the batch.')
   }

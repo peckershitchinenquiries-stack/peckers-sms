@@ -43,7 +43,7 @@ export default async function PrepPage({
         title={isTodayPrep ? "Today's prep" : `Prep — ${formatRelativeDay(prepDay.date)}`}
         description={
           isTodayPrep
-            ? 'Make each sauce, then record how much you made and the bags it went into. That starts the 5-day date on every bag.'
+            ? "Make each sauce, then record how much you made and the bags it went into. That starts each sauce's own shelf-life clock on every bag."
             : `Sauce is prepared on ${describePrepDays(context.prepWeekdays)}. This is the list for ${formatRelativeDay(prepDay.date)}.`
         }
       />
@@ -52,7 +52,11 @@ export default async function PrepPage({
         board={board}
         isToday={isTodayPrep}
         siteName={context.prepSite.name}
-        sauces={sauces.map((sauce) => ({ id: sauce.id, name: sauce.name }))}
+        sauces={sauces.map((sauce) => ({
+          id: sauce.id,
+          name: sauce.name,
+          sealedShelfLifeDays: sauce.sealed_shelf_life_days,
+        }))}
         bagSizesMl={context.settings.bag_sizes_ml}
         isManager={context.isManager}
       />

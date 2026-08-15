@@ -269,15 +269,23 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
   const [editing, setEditing] = React.useState<Sauce | null>(null)
   const [creating, setCreating] = React.useState(false)
   const [deactivating, setDeactivating] = React.useState<Sauce | null>(null)
-  const [form, setForm] = React.useState<{ name: string }>({ name: '' })
+  const [form, setForm] = React.useState<{
+    name: string
+    sealedShelfLifeDays: number
+    openedShelfLifeDays: number
+  }>({ name: '', sealedShelfLifeDays: 5, openedShelfLifeDays: 2 })
 
   const openCreate = () => {
-    setForm({ name: '' })
+    setForm({ name: '', sealedShelfLifeDays: 5, openedShelfLifeDays: 2 })
     setCreating(true)
   }
 
   const openEdit = (sauce: Sauce) => {
-    setForm({ name: sauce.name })
+    setForm({
+      name: sauce.name,
+      sealedShelfLifeDays: sauce.sealed_shelf_life_days,
+      openedShelfLifeDays: sauce.opened_shelf_life_days,
+    })
     setEditing(sauce)
   }
 
@@ -287,6 +295,8 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
         id: editing?.id,
         name: form.name,
         active: editing?.active ?? true,
+        sealedShelfLifeDays: form.sealedShelfLifeDays,
+        openedShelfLifeDays: form.openedShelfLifeDays,
       })
       if (!result.ok) {
         toast({ tone: 'danger', title: 'Could not save', description: result.error })
@@ -351,6 +361,16 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
               cell: (sauce) => (
                 <span className="text-ink-muted">
                   {formatDateOnly(sauce.introduced_on, 'd MMM yyyy')}
+                </span>
+              ),
+            },
+            {
+              key: 'shelfLife',
+              header: 'Shelf life',
+              hideOnMobile: true,
+              cell: (sauce) => (
+                <span className="text-ink-muted">
+                  {sauce.sealed_shelf_life_days}d sealed · {sauce.opened_shelf_life_days}d opened
                 </span>
               ),
             },
@@ -452,6 +472,28 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
             value={form.name}
             onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
             placeholder="e.g. Smoked Chipotle"
+          />
+          <Stepper
+            label="Sealed shelf life"
+            value={form.sealedShelfLifeDays}
+            onChange={(sealedShelfLifeDays) =>
+              setForm((current) => ({ ...current, sealedShelfLifeDays }))
+            }
+            min={1}
+            max={60}
+            step={1}
+            unit="days"
+          />
+          <Stepper
+            label="Opened shelf life"
+            value={form.openedShelfLifeDays}
+            onChange={(openedShelfLifeDays) =>
+              setForm((current) => ({ ...current, openedShelfLifeDays }))
+            }
+            min={1}
+            max={60}
+            step={1}
+            unit="days"
           />
         </div>
       </Modal>
@@ -1050,12 +1092,12 @@ function AppTab({ settings }: { settings: AppSettings }) {
         <CardHeader
           eyebrow="Fixed rules"
           title="Shelf life"
-          description="These are enforced by the database itself, so they hold no matter who logs what."
+          description="Each sauce sets its own sealed and opened shelf life on the Sauces tab. These other rules are enforced by the database itself, so they hold no matter who logs what."
         />
         <dl className="space-y-3">
           {[
-            ['Sealed bag', '5 days from the day it was made'],
-            ['Once opened', '2 days, never beyond the sealed date'],
+            ['Sealed bag', "Days from the day it was made — set per sauce"],
+            ['Once opened', "Days from opening, never beyond the sealed date — set per sauce"],
             ['Coverage', 'Each batch must last until the next prep day'],
             ['Prep hours', 'Recorded from start to finish on the prep screen'],
           ].map(([term, definition]) => (

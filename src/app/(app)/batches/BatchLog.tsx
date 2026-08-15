@@ -39,7 +39,7 @@ export interface BatchLogProps {
   showSiteColumn: boolean
   batches: BatchRow[]
   comparison: PrepVsPlanRow[]
-  sauces: Array<{ id: string; name: string }>
+  sauces: Array<{ id: string; name: string; sealedShelfLifeDays: number }>
   range: { from: DateOnly; to: DateOnly }
   bagSizesMl: number[]
   prepWeekdays: number[]
@@ -138,7 +138,7 @@ export function BatchLog({
       toast({
         tone: 'success',
         title: `${formatMl(result.data?.createdMl ?? 0)} of ${sauce?.name ?? 'sauce'} logged`,
-        description: `Each bag expires ${formatShort(sealedExpiryFor(form.prepDate))}.`,
+        description: `Each bag expires ${formatShort(result.data?.sealedExpiry ?? sealedExpiryFor(form.prepDate, sauce?.sealedShelfLifeDays))}.`,
       })
       setLogOpen(false)
       setForm((current) => ({
@@ -402,7 +402,7 @@ export function BatchLog({
         open={logOpen}
         onClose={() => setLogOpen(false)}
         title="Log a batch"
-        description={`One bag record is created per bag, each with a 5-day sealed expiry. Logging to ${siteName}.`}
+        description={`One bag record is created per bag, each dated by the sauce's own shelf life. Logging to ${siteName}.`}
         footer={
           <>
             <Button variant="ghost" onClick={() => setLogOpen(false)}>
@@ -434,7 +434,12 @@ export function BatchLog({
             onChange={(prepDate) => setForm((current) => ({ ...current, prepDate }))}
             highlightPrepDays
             prepWeekdays={prepWeekdays}
-            hint={`Bags will be sealed until ${formatShort(sealedExpiryFor(form.prepDate))}.`}
+            hint={`Bags will be sealed until ${formatShort(
+              sealedExpiryFor(
+                form.prepDate,
+                sauces.find((candidate) => candidate.id === form.sauceId)?.sealedShelfLifeDays,
+              ),
+            )}.`}
           />
 
           <div>

@@ -42,6 +42,10 @@ export interface Sauce {
   active: boolean
   sort_order: number
   introduced_on: string
+  /** Days a sealed bag lasts from its prep date. Manager-editable, default 5. */
+  sealed_shelf_life_days: number
+  /** Days an opened bag lasts from the moment it was opened. Manager-editable, default 2. */
+  opened_shelf_life_days: number
   created_at: string
   updated_at: string
 }

@@ -33,7 +33,7 @@ export default async function BatchesPage({
       <PageHeader
         eyebrow="Production"
         title="Batch log"
-        description="Every bag that has been made, grouped by the batch it came from. Each bag gets its own 5-day sealed expiry the moment it's packed."
+        description="Every bag that has been made, grouped by the batch it came from. Each bag gets its own sealed expiry, set by the sauce's shelf life, the moment it's packed."
       />
 
       <BatchLog
@@ -45,6 +45,7 @@ export default async function BatchesPage({
         sauces={sauces.map((sauce) => ({
           id: sauce.id,
           name: sauce.name,
+          sealedShelfLifeDays: sauce.sealed_shelf_life_days,
         }))}
         range={{ from, to }}
         bagSizesMl={context.settings.bag_sizes_ml}

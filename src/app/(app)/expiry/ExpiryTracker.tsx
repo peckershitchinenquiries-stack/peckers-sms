@@ -91,7 +91,7 @@ export function ExpiryTracker({
               : `${bag.sauceName} discarded`,
         description:
           status === 'opened'
-            ? 'This bag now has 2 days of life, capped at its original 5-day date.'
+            ? "This bag now runs on the sauce's opened shelf life, capped at its original sealed date."
             : undefined,
       })
       router.refresh()

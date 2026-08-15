@@ -231,25 +231,30 @@ export function describePrepDays(weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS)
 /* Shelf life                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** A sealed vacuum bag lasts 5 days from the prep date. */
+/** Fallback used only where no sauce is in scope yet (e.g. before one is picked). */
 export const SEALED_SHELF_LIFE_DAYS = 5
 
-/** Once opened, a bag lasts 2 days from the moment it was opened. */
+/** Fallback used only where no sauce is in scope yet (e.g. before one is picked). */
 export const OPENED_SHELF_LIFE_DAYS = 2
 
-export function sealedExpiryFor(prepDate: DateOnly): DateOnly {
-  return addDaysTo(prepDate, SEALED_SHELF_LIFE_DAYS)
+/** Each sauce sets its own sealed shelf life (`sauces.sealed_shelf_life_days`); this is only the default for new sauces or a not-yet-chosen one. */
+export function sealedExpiryFor(prepDate: DateOnly, sealedDays: number = SEALED_SHELF_LIFE_DAYS): DateOnly {
+  return addDaysTo(prepDate, sealedDays)
 }
 
 /**
- * Opened expiry = min(sealed expiry, opened date + 2 days).
+ * Opened expiry = min(sealed expiry, opened date + the sauce's opened shelf life).
  *
  * Opening a bag can only ever shorten its life, never extend it past the
- * original 5-day sealed cap.
+ * sealed expiry.
  */
-export function openedExpiryFor(openedOn: DateOnly, sealedExpiry: DateOnly): DateOnly {
-  const twoDaysOut = addDaysTo(openedOn, OPENED_SHELF_LIFE_DAYS)
-  return daysBetween(twoDaysOut, sealedExpiry) < 0 ? sealedExpiry : twoDaysOut
+export function openedExpiryFor(
+  openedOn: DateOnly,
+  sealedExpiry: DateOnly,
+  openedDays: number = OPENED_SHELF_LIFE_DAYS,
+): DateOnly {
+  const daysOut = addDaysTo(openedOn, openedDays)
+  return daysBetween(daysOut, sealedExpiry) < 0 ? sealedExpiry : daysOut
 }
 
 export type ExpiryLevel = 'expired' | 'critical' | 'warning' | 'healthy'

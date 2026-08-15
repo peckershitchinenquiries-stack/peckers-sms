@@ -24,7 +24,7 @@ import {
   startPrepSession,
   undoPrepLine,
 } from '@/lib/actions/prep'
-import { formatShort, formatTimeOfDay, hoursBetween, sealedExpiryFor } from '@/lib/date'
+import { formatShort, formatTimeOfDay, hoursBetween } from '@/lib/date'
 import { motion as motionTokens } from '@/lib/design/tokens'
 import { packVolume } from '@/lib/forecast/packing'
 import { formatMl } from '@/lib/utils/volume'
@@ -34,7 +34,7 @@ export interface PrepChecklistProps {
   board: PrepBoard
   isToday: boolean
   siteName: string
-  sauces: Array<{ id: string; name: string }>
+  sauces: Array<{ id: string; name: string; sealedShelfLifeDays: number }>
   bagSizesMl: number[]
   isManager: boolean
 }
@@ -122,9 +122,6 @@ export function PrepChecklist({
                 />
                 <p className="mt-2 text-sm text-ink-muted">
                   {formatMl(board.totalMadeMl)} made of {formatMl(board.totalPlannedMl)} planned
-                  {board.totalMadeMl > 0
-                    ? ` · everything dated ${formatShort(sealedExpiryFor(board.prepDate))}`
-                    : ''}
                 </p>
               </>
             ) : null}

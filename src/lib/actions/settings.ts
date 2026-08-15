@@ -22,6 +22,8 @@ export async function upsertSauce(input: {
   id?: string
   name: string
   active?: boolean
+  sealedShelfLifeDays?: number
+  openedShelfLifeDays?: number
 }): Promise<ActionResult<{ id: string }>> {
   try {
     await requireManager()
@@ -29,13 +31,25 @@ export async function upsertSauce(input: {
     const name = input.name.trim()
     if (name.length < 2) return fail(new Error('Give the sauce a name.'))
 
+    if (input.sealedShelfLifeDays !== undefined) {
+      if (!Number.isInteger(input.sealedShelfLifeDays) || input.sealedShelfLifeDays < 1) {
+        return fail(new Error('Sealed shelf life must be a whole number of at least 1 day.'))
+      }
+    }
+    if (input.openedShelfLifeDays !== undefined) {
+      if (!Number.isInteger(input.openedShelfLifeDays) || input.openedShelfLifeDays < 1) {
+        return fail(new Error('Opened shelf life must be a whole number of at least 1 day.'))
+      }
+    }
+
     const supabase = createServerSupabase()
 
     if (input.id) {
-      const { error } = await supabase
-        .from('sauces')
-        .update({ name, active: input.active ?? true })
-        .eq('id', input.id)
+      const patch: Record<string, unknown> = { name, active: input.active ?? true }
+      if (input.sealedShelfLifeDays !== undefined) patch.sealed_shelf_life_days = input.sealedShelfLifeDays
+      if (input.openedShelfLifeDays !== undefined) patch.opened_shelf_life_days = input.openedShelfLifeDays
+
+      const { error } = await supabase.from('sauces').update(patch).eq('id', input.id)
       if (error) throw new Error(error.message)
 
       revalidatePath('/settings')
@@ -43,7 +57,8 @@ export async function upsertSauce(input: {
     }
 
     // A new sauce is introduced today, so the forecast engine averages its
-    // usage over the days it has actually existed.
+    // usage over the days it has actually existed. Shelf life defaults to the
+    // house-wide 5/2 days when not given.
     const { data, error } = await supabase
       .from('sauces')
       .insert({
@@ -51,6 +66,12 @@ export async function upsertSauce(input: {
         slug: slugify(name),
         active: true,
         introduced_on: today(),
+        ...(input.sealedShelfLifeDays !== undefined
+          ? { sealed_shelf_life_days: input.sealedShelfLifeDays }
+          : {}),
+        ...(input.openedShelfLifeDays !== undefined
+          ? { opened_shelf_life_days: input.openedShelfLifeDays }
+          : {}),
       })
       .select('id')
       .single<{ id: string }>()

@@ -274,7 +274,7 @@ export default async function TodayPage() {
 
       <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-ink-subtle">
         <Icon name="info" size={13} />
-        Sealed bags last 5 days. Once opened, 2 days — never beyond the sealed date.
+        Each sauce has its own shelf life — opening a bag never extends it beyond the sealed date.
       </p>
     </>
   )
