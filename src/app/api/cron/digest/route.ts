@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
     const scan = await runAlertScan(supabase, {
       sites: siteList.map((site) => ({ id: site.id, name: site.name })),
       windowDays: settings?.forecast_window_days ?? 28,
+      prepWeekdays: settings?.prep_weekdays,
       asOf,
     })
 
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const nextPrep = nextPrepDayAfter(asOf)
+    const nextPrep = nextPrepDayAfter(asOf, settings?.prep_weekdays)
     const email = renderDigestEmail({
       date: asOf,
       dateLabel: formatDateOnly(asOf, 'EEEE d MMMM yyyy'),

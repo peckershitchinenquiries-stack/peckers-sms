@@ -5,10 +5,15 @@ export interface SauceSeed {
   defaultParMl: number
 }
 
-/** The two Peckers kitchens. */
+/**
+ * The two Peckers restaurants.
+ *
+ * Sauce is prepared at Stevenage only and delivered to Hitchin, so Hitchin
+ * never sees a prep checklist — only daily usage.
+ */
 export const SITE_SEEDS = [
-  { name: 'Stevenage', slug: 'stevenage' },
-  { name: 'Hitchin', slug: 'hitchin' },
+  { name: 'Stevenage', slug: 'stevenage', isPrepSite: true },
+  { name: 'Hitchin', slug: 'hitchin', isPrepSite: false },
 ] as const
 
 /**
@@ -36,30 +41,12 @@ export const SAUCE_SEEDS: SauceSeed[] = [
   { name: 'Ranch', slug: 'ranch', defaultParMl: 14_000 },
 ]
 
-/** The three prep steps, in order. Staff tick them off left to right. */
-export const PREP_STEPS = [
-  {
-    key: 'cooked',
-    label: 'Cooked',
-    column: 'cooked_at',
-    icon: 'flame',
-    description: 'Batch cooked to spec',
-  },
-  {
-    key: 'blast_chilled',
-    label: 'Blast chilled',
-    column: 'blast_chilled_at',
-    icon: 'snowflake',
-    description: '1.5 hour hold in the blast chiller',
-  },
-  {
-    key: 'vacuum_packed',
-    label: 'Vacuum packed',
-    column: 'vacuum_packed_at',
-    icon: 'package',
-    description: 'Sealed into bags — starts the 5-day clock',
-  },
-] as const
-
-export type PrepStepKey = (typeof PREP_STEPS)[number]['key']
-export type PrepStepColumn = (typeof PREP_STEPS)[number]['column']
+/**
+ * Prep is deliberately a single step.
+ *
+ * The old cook -> blast chill -> vacuum pack ticklist didn't survive contact
+ * with the kitchen: cold sauces never go near a blast chiller, and asking for
+ * three timestamps per sauce made staff log ceremony rather than facts. A line
+ * now records only what we actually use downstream — the volume made and when.
+ */
+export const DEFAULT_PREP_WEEKDAYS = [2, 5] as const

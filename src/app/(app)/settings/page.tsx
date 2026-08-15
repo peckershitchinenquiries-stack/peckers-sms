@@ -20,7 +20,7 @@ export default async function SettingsPage() {
       <PageHeader
         eyebrow="Configuration"
         title="Settings"
-        description="Sauces, par levels, staff accounts and how the forecast and alerts behave."
+        description="Prep days, sauces, minimum stock levels and staff accounts."
       />
 
       <SettingsPanel

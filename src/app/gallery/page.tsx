@@ -3,7 +3,6 @@
 import * as React from 'react'
 import {
   Badge,
-  BlastChillTimer,
   Button,
   Calendar,
   Callout,
@@ -75,7 +74,6 @@ export default function GalleryPage() {
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [sheetOpen, setSheetOpen] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
-  const [chillStart, setChillStart] = React.useState<string | null>(null)
   const [loadingDemo, setLoadingDemo] = React.useState(false)
 
   return (
@@ -351,31 +349,6 @@ export default function GalleryPage() {
                 Suggested bags
                 <InfoHint content="Burn rate 2.4/day × 3 days − 4 in stock, +10% buffer." />
               </span>
-            </div>
-          </Section>
-
-          <Section title="Blast-chill timer" description="Derived from the stored timestamp, so it survives a refresh.">
-            <div className="flex flex-wrap items-center gap-10">
-              <BlastChillTimer
-                startedAt={chillStart}
-                durationMinutes={2}
-                onComplete={() =>
-                  toast({ tone: 'success', title: 'Blast chill complete', description: 'Ready to vacuum pack.' })
-                }
-              />
-              <div className="space-y-3">
-                <Button
-                  leadingIcon="snowflake"
-                  onClick={() => setChillStart(new Date().toISOString())}
-                  disabled={Boolean(chillStart)}
-                >
-                  Start blast chill
-                </Button>
-                <Button variant="ghost" leadingIcon="refresh-cw" onClick={() => setChillStart(null)}>
-                  Reset
-                </Button>
-                <BlastChillTimer size="sm" startedAt={chillStart} durationMinutes={2} />
-              </div>
             </div>
           </Section>
 

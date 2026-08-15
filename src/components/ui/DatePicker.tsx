@@ -9,6 +9,7 @@ import {
   type DateOnly,
   addDaysTo,
   daysBetween,
+  describePrepDays,
   formatDateOnly,
   isPrepDay,
   monthGrid,
@@ -36,8 +37,10 @@ interface CalendarProps {
   onSelect: (date: DateOnly) => void
   min?: DateOnly
   max?: DateOnly
-  /** Ring Tuesdays and Fridays so prep days are findable at a glance. */
+  /** Ring prep days so they are findable at a glance. */
   highlightPrepDays?: boolean
+  /** Which weekdays count as prep days. Defaults to Tuesday and Friday. */
+  prepWeekdays?: number[]
   todayDate?: DateOnly
 }
 
@@ -50,6 +53,7 @@ export function Calendar({
   min,
   max,
   highlightPrepDays = false,
+  prepWeekdays,
   todayDate = todayFn(),
 }: CalendarProps) {
   const [anchor, setAnchor] = React.useState<DateOnly>(value ?? todayDate)
@@ -192,7 +196,7 @@ export function Calendar({
             cell.date === value || (mode === 'range' && cell.date === rangeEnd)
           const disabled = isDisabled(cell.date)
           const between = inRange(cell.date)
-          const prepDay = highlightPrepDays && isPrepDay(cell.date)
+          const prepDay = highlightPrepDays && isPrepDay(cell.date, prepWeekdays)
 
           return (
             <button
@@ -240,7 +244,7 @@ export function Calendar({
       {highlightPrepDays ? (
         <p className="mt-2 flex items-center gap-1.5 border-t border-border pt-2 text-2xs text-ink-subtle">
           <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-warning" />
-          Prep days (Tue &amp; Fri)
+          {describePrepDays(prepWeekdays)}
         </p>
       ) : null}
     </div>
@@ -260,6 +264,8 @@ export interface DatePickerProps {
   disabled?: boolean
   required?: boolean
   highlightPrepDays?: boolean
+  /** Which weekdays count as prep days. Defaults to Tuesday and Friday. */
+  prepWeekdays?: number[]
   className?: string
   containerClassName?: string
   id?: string
@@ -280,6 +286,7 @@ export function DatePicker({
   disabled,
   required,
   highlightPrepDays,
+  prepWeekdays,
   className,
   containerClassName,
   id,
@@ -360,6 +367,7 @@ export function DatePicker({
                 min={min}
                 max={max}
                 highlightPrepDays={highlightPrepDays}
+                prepWeekdays={prepWeekdays}
               />
             </motion.div>
           ) : null}

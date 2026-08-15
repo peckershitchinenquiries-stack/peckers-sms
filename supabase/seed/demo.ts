@@ -348,137 +348,189 @@ async function main(): Promise<void> {
   await insertInChunks(supabase, 'usage_logs', usageRows)
   console.log(`  · ${usageRows.length} daily usage rows across ${HISTORY_DAYS} days`)
 
-  /* -- 7. Prep sessions + bags -------------------------------------------- */
-  const prepDates = allDates.filter(isPrepDay).concat(isPrepDay(asOf) ? [asOf] : [])
+  /* -- 7. Prep sessions, bags and the delivery run ------------------------- */
+  // Everything is cooked at Stevenage and driven over to Hitchin the same
+  // morning, so there is one session per prep day, not one per restaurant.
+  const prepDates = allDates.filter((date) => isPrepDay(date)).concat(isPrepDay(asOf) ? [asOf] : [])
   const bagRows: Record<string, unknown>[] = []
+  const transferRows: Record<string, unknown>[] = []
   let sessionCount = 0
 
-  for (const site of SITE_SEEDS) {
-    const siteId = siteBySlug.get(site.slug)!.id
-    const staffEmail = site.slug === 'hitchin' ? 'hitchin@peckers.dev' : 'staff@peckers.dev'
-    const staffId = profileByEmail.get(staffEmail)!.id
+  const prepSlug = SITE_SEEDS.find((site) => site.isPrepSite)!.slug
+  const prepSiteId = siteBySlug.get(prepSlug)!.id
+  const receivingSites = SITE_SEEDS.filter((site) => !site.isPrepSite)
+  const staffId = profileByEmail.get('staff@peckers.dev')!.id
 
-    for (const prepDate of prepDates) {
-      // Prep runs 07:00 until somewhere between 10:15 and 11:00.
-      const startedAt = atLocalTime(prepDate, '07:00:00')
-      const endMinutes = 195 + Math.round(rng() * 45)
-      const endedAt = new Date(
-        new Date(startedAt).getTime() + endMinutes * 60_000,
-      ).toISOString()
+  for (const prepDate of prepDates) {
+    // Prep runs 07:00 until somewhere between 10:15 and 11:00.
+    const startedAt = atLocalTime(prepDate, '07:00:00')
+    const endMinutes = 195 + Math.round(rng() * 45)
+    const endedAt = new Date(new Date(startedAt).getTime() + endMinutes * 60_000).toISOString()
 
-      const { data: session, error: sessionError } = await supabase
-        .from('prep_sessions')
-        .insert({
-          site_id: siteId,
-          staff_id: staffId,
-          prep_date: prepDate,
-          started_at: startedAt,
-          ended_at: endedAt,
-        })
-        .select('id')
-        .single()
-      if (sessionError) throw new Error(`Prep session: ${sessionError.message}`)
-      sessionCount += 1
+    const { data: session, error: sessionError } = await supabase
+      .from('prep_sessions')
+      .insert({
+        site_id: prepSiteId,
+        staff_id: staffId,
+        prep_date: prepDate,
+        started_at: startedAt,
+        ended_at: endedAt,
+      })
+      .select('id')
+      .single()
+    if (sessionError) throw new Error(`Prep session: ${sessionError.message}`)
+    sessionCount += 1
 
-      const coversDays = weekdayOf(prepDate) === 2 ? 3 : 4
-      const checklistRows: Record<string, unknown>[] = []
+    const coversDays = upcomingPrepDay(prepDate).coversDays
+    const checklistRows: Record<string, unknown>[] = []
 
-      for (const sauce of SAUCE_SEEDS) {
-        const sauceId = sauceBySlug.get(sauce.slug)!.id
-        const byDate = usageIndex.get(site.slug)!.get(sauce.slug)!
+    /** What one restaurant got through over the days this batch had to cover. */
+    const consumedAt = (siteSlug: string, sauceSlug: string) =>
+      Array.from(
+        { length: coversDays },
+        (_, offset) =>
+          usageIndex.get(siteSlug)!.get(sauceSlug)!.get(addDaysTo(prepDate, offset)) ?? 0,
+      ).reduce((sum, value) => sum + value, 0)
 
-        // Make roughly what the following days actually consumed, ±300ml —
-        // that's what a kitchen working from memory looks like.
-        const consumedMl = Array.from({ length: coversDays }, (_, offset) =>
-          byDate.get(addDaysTo(prepDate, offset)) ?? 0,
-        ).reduce((sum, value) => sum + value, 0)
+    for (const sauce of SAUCE_SEEDS) {
+      const sauceId = sauceBySlug.get(sauce.slug)!.id
 
-        const madeMl = Math.max(0, consumedMl + Math.round((rng() * 3 - 1) * 300))
-        if (madeMl === 0) continue
+      const perSite = SITE_SEEDS.map((site) => ({
+        slug: site.slug,
+        siteId: siteBySlug.get(site.slug)!.id,
+        ml: consumedAt(site.slug, sauce.slug),
+      }))
+      const consumedMl = perSite.reduce((sum, entry) => sum + entry.ml, 0)
 
-        // Pack the volume into the least-wasteful mix of bag sizes, exactly
-        // as the real prep checklist would.
-        const pack = packVolume(madeMl, BAG_SIZES_ML)
-        const sizesFlat = Object.entries(pack.counts).flatMap(([size, count]) =>
-          Array<number>(count).fill(Number(size)),
-        )
-        if (sizesFlat.length === 0) continue
+      // Make roughly what the following days actually consumed, ±300ml —
+      // that's what a kitchen working from memory looks like.
+      const madeMl = Math.max(0, consumedMl + Math.round((rng() * 3 - 1) * 300))
+      if (madeMl === 0) continue
 
-        checklistRows.push({
-          session_id: session!.id,
-          sauce_id: sauceId,
-          planned_ml: madeMl,
-          cooked_at: atLocalTime(prepDate, '07:30:00'),
-          blast_chilled_at: atLocalTime(prepDate, '08:15:00'),
-          vacuum_packed_at: atLocalTime(prepDate, '09:45:00'),
-        })
+      const pack = packVolume(madeMl, BAG_SIZES_ML)
+      const sizesFlat = Object.entries(pack.counts).flatMap(([size, count]) =>
+        Array<number>(count).fill(Number(size)),
+      )
+      if (sizesFlat.length === 0) continue
 
-        const daysOld = dateDiff(prepDate, asOf)
-        const made = sizesFlat.length
+      checklistRows.push({
+        site_id: prepSiteId,
+        prep_date: prepDate,
+        session_id: session!.id,
+        sauce_id: sauceId,
+        planned_ml: consumedMl,
+        actual_ml: sizesFlat.reduce((sum, size) => sum + size, 0),
+        completed_at: atLocalTime(prepDate, '09:45:00'),
+      })
 
-        for (let index = 0; index < made; index += 1) {
-          // Bags older than their 5-day sealed life are already resolved.
-          // Anything from the last few days is still live stock.
-          let status: 'sealed' | 'opened' | 'used' | 'discarded' = 'sealed'
-          let openedAt: string | null = null
+      // Split the bags the way the van would: whole bags, roughly in
+      // proportion to each restaurant's share of the demand.
+      const bagOwners: string[] = sizesFlat.map(() => prepSiteId)
+      for (const destination of receivingSites) {
+        const share = consumedMl > 0
+          ? (perSite.find((entry) => entry.slug === destination.slug)?.ml ?? 0) / consumedMl
+          : 0
+        const targetMl = madeMl * share
+        const destinationId = siteBySlug.get(destination.slug)!.id
 
-          if (daysOld > 5) {
-            status = rng() < 0.92 ? 'used' : 'discarded'
-          } else if (index < Math.floor(made * 0.35)) {
-            status = 'used'
-          } else if (index < Math.floor(made * 0.5)) {
-            status = 'opened'
-            openedAt = atLocalTime(addDaysTo(asOf, rng() < 0.5 ? 0 : -1), '11:30:00')
-          }
+        let movedMl = 0
+        let movedBags = 0
+        for (let index = 0; index < sizesFlat.length; index += 1) {
+          if (bagOwners[index] !== prepSiteId) continue
+          if (movedMl >= targetMl) break
+          bagOwners[index] = destinationId
+          movedMl += sizesFlat[index]
+          movedBags += 1
+        }
 
-          bagRows.push({
+        if (movedBags > 0) {
+          transferRows.push({
             sauce_id: sauceId,
-            site_id: siteId,
-            prep_session_id: session!.id,
-            size_ml: sizesFlat[index],
-            prep_date: prepDate,
-            sealed_expiry: addDaysTo(prepDate, 5),
-            status,
-            opened_at: openedAt,
-            used_at: status === 'used' ? atLocalTime(addDaysTo(prepDate, 2), '18:00:00') : null,
-            discarded_at:
-              status === 'discarded' ? atLocalTime(addDaysTo(prepDate, 5), '20:00:00') : null,
-            discard_reason: status === 'discarded' ? 'Expired before use' : null,
+            from_site_id: prepSiteId,
+            to_site_id: destinationId,
+            transfer_date: prepDate,
+            ml: movedMl,
+            bags: movedBags,
             created_by: staffId,
           })
         }
       }
 
-      if (checklistRows.length > 0) {
-        await insertInChunks(supabase, 'prep_checklist', checklistRows)
+      const daysOld = dateDiff(prepDate, asOf)
+      const made = sizesFlat.length
+
+      for (let index = 0; index < made; index += 1) {
+        // Bags older than their 5-day sealed life are already resolved.
+        // Anything from the last few days is still live stock.
+        let status: 'sealed' | 'opened' | 'used' | 'discarded' = 'sealed'
+        let openedAt: string | null = null
+
+        if (daysOld > 5) {
+          status = rng() < 0.92 ? 'used' : 'discarded'
+        } else if (index < Math.floor(made * 0.35)) {
+          status = 'used'
+        } else if (index < Math.floor(made * 0.5)) {
+          status = 'opened'
+          openedAt = atLocalTime(addDaysTo(asOf, rng() < 0.5 ? 0 : -1), '11:30:00')
+        }
+
+        bagRows.push({
+          sauce_id: sauceId,
+          // Where the bag ended up, not where it was cooked.
+          site_id: bagOwners[index],
+          prep_session_id: session!.id,
+          size_ml: sizesFlat[index],
+          prep_date: prepDate,
+          sealed_expiry: addDaysTo(prepDate, 5),
+          status,
+          opened_at: openedAt,
+          used_at: status === 'used' ? atLocalTime(addDaysTo(prepDate, 2), '18:00:00') : null,
+          discarded_at:
+            status === 'discarded' ? atLocalTime(addDaysTo(prepDate, 5), '20:00:00') : null,
+          discard_reason: status === 'discarded' ? 'Expired before use' : null,
+          created_by: staffId,
+        })
       }
+    }
+
+    if (checklistRows.length > 0) {
+      await insertInChunks(supabase, 'prep_checklist', checklistRows)
     }
   }
 
   await insertInChunks(supabase, 'bags', bagRows)
-  console.log(`  · ${sessionCount} prep sessions and ${bagRows.length} bags`)
+  await insertInChunks(supabase, 'stock_transfers', transferRows)
+  console.log(
+    `  · ${sessionCount} prep sessions, ${bagRows.length} bags, ${transferRows.length} deliveries`,
+  )
 
   /* -- 8. Forecast plan for the upcoming prep day -------------------------- */
+  // One plan, owned by the prep kitchen, whose quantities are the sum of what
+  // every restaurant needs — mirroring generatePlan().
   const nextPrep = upcomingPrepDay(asOf)
   const managerId = profileByEmail.get('manager@peckers.dev')!.id
-  let planItemCount = 0
+
+  const { data: plan, error: planError } = await supabase
+    .from('prep_plans')
+    .insert({
+      site_id: prepSiteId,
+      prep_date: nextPrep.date,
+      covers_days: nextPrep.coversDays,
+      status: 'confirmed',
+      created_by: managerId,
+    })
+    .select('id')
+    .single()
+  if (planError) throw new Error(`Prep plan: ${planError.message}`)
+
+  /** sauceId -> { total, bySite } */
+  const combined = new Map<
+    string,
+    { total: number; reasoning: unknown; bySite: Array<{ siteId: string; ml: number }> }
+  >()
 
   for (const site of SITE_SEEDS) {
     const siteId = siteBySlug.get(site.slug)!.id
-
-    const { data: plan, error: planError } = await supabase
-      .from('prep_plans')
-      .insert({
-        site_id: siteId,
-        prep_date: nextPrep.date,
-        prep_type: nextPrep.type,
-        covers_days: nextPrep.coversDays,
-        status: 'draft',
-        created_by: managerId,
-      })
-      .select('id')
-      .single()
-    if (planError) throw new Error(`Prep plan: ${planError.message}`)
 
     const { data: inputs, error: inputError } = await supabase.rpc('forecast_inputs', {
       p_site_id: siteId,
@@ -487,7 +539,7 @@ async function main(): Promise<void> {
     })
     if (inputError) throw new Error(`forecast_inputs: ${inputError.message}`)
 
-    const items = (inputs as ForecastInputRow[]).map((row) => {
+    for (const row of inputs as ForecastInputRow[]) {
       const result = forecastSauce(
         {
           sauceId: row.sauce_id,
@@ -507,19 +559,44 @@ async function main(): Promise<void> {
         },
       )
 
-      return {
-        plan_id: plan!.id,
-        sauce_id: row.sauce_id,
-        suggested_ml: result.suggestedMl,
-        reasoning: result.reasoning,
+      const existing = combined.get(row.sauce_id)
+      if (existing) {
+        existing.total += result.suggestedMl
+        existing.bySite.push({ siteId, ml: result.suggestedMl })
+      } else {
+        combined.set(row.sauce_id, {
+          total: result.suggestedMl,
+          reasoning: result.reasoning,
+          bySite: [{ siteId, ml: result.suggestedMl }],
+        })
       }
-    })
-
-    await insertInChunks(supabase, 'prep_plan_items', items)
-    planItemCount += items.length
+    }
   }
+
+  const { data: planItems, error: itemError } = await supabase
+    .from('prep_plan_items')
+    .insert(
+      Array.from(combined.entries()).map(([sauceId, entry]) => ({
+        plan_id: plan!.id,
+        sauce_id: sauceId,
+        suggested_ml: entry.total,
+        reasoning: entry.reasoning,
+      })),
+    )
+    .select('id, sauce_id')
+  if (itemError) throw new Error(`Prep plan items: ${itemError.message}`)
+
+  const allocations = (planItems ?? []).flatMap((item) =>
+    (combined.get(item.sauce_id)?.bySite ?? []).map((entry) => ({
+      item_id: item.id,
+      site_id: entry.siteId,
+      suggested_ml: entry.ml,
+    })),
+  )
+  await insertInChunks(supabase, 'prep_plan_allocations', allocations)
+
   console.log(
-    `  · forecast plan for ${nextPrep.date} (${nextPrep.type}, ${nextPrep.coversDays}-day cover) — ${planItemCount} items`,
+    `  · plan for ${nextPrep.date} (must last ${nextPrep.coversDays} days) — ${combined.size} sauces, ${allocations.length} site splits`,
   )
 
   console.log('\nDone.\n')

@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import { PageHeader } from '@/components/app/PageHeader'
 import { PlannerBoard } from './PlannerBoard'
 import { requireManager } from '@/lib/auth'
-import { buildForecast, getPlan } from '@/lib/queries/planning'
-import { formatShort, isPrepDay, today, upcomingPrepDay } from '@/lib/date'
+import { buildCombinedForecast, getPlan } from '@/lib/queries/planning'
+import { describePrepDays, formatShort, isPrepDay, today, upcomingPrepDay } from '@/lib/date'
 import { EmptyState } from '@/components/ui'
 
 export const metadata: Metadata = { title: 'Prep planner' }
@@ -11,64 +11,55 @@ export const metadata: Metadata = { title: 'Prep planner' }
 export default async function PlannerPage({
   searchParams,
 }: {
-  searchParams: { site?: string; date?: string }
+  searchParams: { date?: string }
 }) {
   const context = await requireManager()
 
-  // The planner is inherently per-site — a plan belongs to one kitchen. Default
-  // to the first site when the manager is scoped to "both".
-  const siteId =
-    searchParams.site && context.sites.some((site) => site.id === searchParams.site)
-      ? searchParams.site
-      : context.sites[0]?.id
-
-  if (!siteId) {
+  if (!context.prepSite) {
     return (
       <EmptyState
         icon="map-pin"
-        title="No sites configured"
-        description="Add a site in Settings before planning a prep day."
+        title="No prep kitchen set"
+        description="Choose which restaurant prepares sauce in Settings → Restaurants, then come back here."
       />
     )
   }
 
-  const requestedDate =
-    searchParams.date && isPrepDay(searchParams.date) ? searchParams.date : undefined
-  const prepDay = upcomingPrepDay(requestedDate ?? today())
+  const requested =
+    searchParams.date && isPrepDay(searchParams.date, context.prepWeekdays)
+      ? searchParams.date
+      : undefined
+  const prepDay = upcomingPrepDay(requested ?? today(), context.prepWeekdays)
 
-  const [existingPlan, forecast] = await Promise.all([
-    getPlan(siteId, prepDay.date, context.settings.bag_sizes_ml),
-    buildForecast({
-      siteId,
+  const [plan, forecast] = await Promise.all([
+    getPlan(context.prepSite.id, prepDay.date, context.settings.bag_sizes_ml),
+    buildCombinedForecast({
+      sites: context.sites.map((site) => ({ id: site.id, name: site.name })),
       prepDate: prepDay.date,
       windowDays: context.settings.forecast_window_days,
       bufferMultiplier: Number(context.settings.forecast_buffer),
       bagSizesMl: context.settings.bag_sizes_ml,
+      prepWeekdays: context.prepWeekdays,
     }),
   ])
 
-  const site = context.sites.find((candidate) => candidate.id === siteId)!
+  const lastCovered = prepDay.coverageDates[prepDay.coverageDates.length - 1]
 
   return (
     <>
       <PageHeader
-        eyebrow="Forecast"
-        title="Prep planner"
-        description={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} batch at ${site.name} — must cover ${prepDay.coversDays} days (${formatShort(prepDay.coverageDates[0])} to ${formatShort(prepDay.coverageDates[prepDay.coverageDates.length - 1])}).`}
+        eyebrow={describePrepDays(context.prepWeekdays)}
+        title={`Plan for ${formatShort(prepDay.date)}`}
+        description={`Everything is cooked at ${context.prepSite.name} and must last until ${formatShort(lastCovered)} — ${prepDay.coversDays} days across ${context.sites.length} restaurant${context.sites.length === 1 ? '' : 's'}.`}
       />
 
       <PlannerBoard
-        site={site}
-        sites={context.sites}
         prepDate={prepDay.date}
-        prepType={prepDay.type}
         coversDays={prepDay.coversDays}
-        coverageDates={prepDay.coverageDates}
+        prepSiteName={context.prepSite.name}
+        sites={context.sites.map((site) => ({ id: site.id, name: site.name }))}
         forecasts={forecast.forecasts}
-        plan={existingPlan}
-        windowDays={context.settings.forecast_window_days}
-        bufferMultiplier={Number(context.settings.forecast_buffer)}
-        bagSizesMl={context.settings.bag_sizes_ml}
+        plan={plan}
       />
     </>
   )

@@ -28,14 +28,15 @@ These drive every calculation in the app and are enforced in the database, not j
 
 | Rule | Detail |
 | --- | --- |
-| **Prep days** | Tuesday and Friday, 7–11am. This time is paid overtime and must be logged. |
-| **Tuesday batch** | Must cover **3 days** — Tue, Wed, Thu. |
-| **Friday batch** | Must cover **4 days** — Fri, Sat, Sun, Mon. |
+| **Where sauce is made** | One kitchen only — Stevenage (`sites.is_prep_site`). It is delivered out to the other restaurants. Hitchin never sees a prep screen. |
+| **Prep days** | Configurable in Settings (`app_settings.prep_weekdays`). Tuesday and Friday today; a manager can change them without a deploy. |
+| **Coverage** | Derived, not hardcoded: a batch must last until the **next** prep day. With Tue/Fri that gives the familiar 3-day and 4-day batches. |
+| **Prep process** | **One step per sauce.** Staff record the volume made and the bags it went into. Cold sauces never go near a blast chiller, so a cook → chill → pack ticklist was recording ceremony rather than facts. |
+| **Delivery** | Recorded explicitly (`stock_transfers`). Sending moves whole bags to the receiving restaurant, so their stock and expiry dates update immediately. |
 | **Sealed shelf life** | 5 days from the prep date. |
 | **Opened shelf life** | 2 days from opening — `opened_expiry = min(sealed_expiry, opened_date + 2 days)`. Opening a bag can only ever shorten its life. |
-| **Prep process** | 3 steps per sauce: **Cooked → Blast Chilled (1.5 hr) → Vacuum Packed**. |
-| **Bag sizes** | 300 / 500 / 1000 / 2000ml, configurable in Settings (`app_settings.bag_sizes_ml`). Every batch is packed into whichever mix wastes the least volume — see `src/lib/forecast/packing.ts`. |
-| **Par levels** | Configurable per sauce **per site**, in ml. Acts as a floor on the forecast. |
+| **Bag sizes** | 300 / 500 / 1000 / 2000ml, configurable in Settings (`app_settings.bag_sizes_ml`). The prep screen pre-fills the least-wasteful mix — see `src/lib/forecast/packing.ts`. |
+| **Minimum stock** | Configurable per sauce **per restaurant**, in ml. Acts as a floor on the forecast. |
 
 ### The 15 sauces
 
@@ -43,10 +44,11 @@ Buffalo, Butter Me Up, Garlic Aioli, House Mayo, Supercharged OG, Hot Honey, Che
 
 ### Roles
 
-- **Manager** — sees everything across both sites, sets par levels, overrides forecasts, gets alerts, exports payroll CSVs.
-- **Kitchen staff** — tied to one site. Logs prep and daily usage, sees today's checklist and what needs using up.
+- **Manager** — sees everything across both restaurants, sets prep days and minimum stock, adjusts forecasts, gets alerts, exports payroll CSVs.
+- **Prep-kitchen staff** (Stevenage) — plan → make → send. Sees the prep checklist, the delivery run, usage, expiry and alerts.
+- **Receiving staff** (Hitchin) — a four-item menu: Today, Daily usage, Expiry and Alerts. No planner, no checklist, no delivery run, because none of it is theirs to do.
 
-Row Level Security enforces this at the database level: staff physically cannot read or write another site's rows, whatever the client asks for.
+Row Level Security enforces the site boundary at the database level: staff physically cannot read or write another restaurant's rows, whatever the client asks for. The prep/receive split is enforced in `requirePrepAccess()`, which redirects rather than showing an empty screen.
 
 ---
 
@@ -212,17 +214,26 @@ For fake demo data instead (dev/staging only), see [Local development with demo 
 ### Schema at a glance
 
 ```
-sites ──┬── profiles (fk auth.users, role, site_id)
+sites (is_prep_site) ──┬── profiles (fk auth.users, role, site_id)
         ├── par_levels (target_ml) ─── sauces
-        ├── prep_plans ─── prep_plan_items (suggested_ml, override_ml, reasoning jsonb)
-        ├── prep_sessions ─┬─ prep_checklist (planned_ml, cooked_at, blast_chilled_at, vacuum_packed_at)
-        │                  └─ bags (ONE ROW PER PHYSICAL BAG, size_ml)
+        ├── prep_plans ─── prep_plan_items (suggested_ml, override_ml, reasoning)
+        │                       └─ prep_plan_allocations (site_id, suggested_ml)
+        ├── prep_checklist (site_id, prep_date, sauce_id, planned_ml, actual_ml, completed_at)
+        ├── prep_sessions (the overtime clock; checklist rows reference it, optionally)
+        ├── bags (ONE ROW PER PHYSICAL BAG, size_ml)
+        ├── stock_transfers (the Stevenage → Hitchin delivery record)
         ├── usage_logs (ml_used)
         └── alerts
-app_settings (singleton: timezone, digest hour, recipients, forecast buffer & window, bag_sizes_ml)
+app_settings (singleton: timezone, digest hour, recipients, forecast buffer & window,
+              bag_sizes_ml, prep_weekdays)
 ```
 
 `bags` is the heart of the system — one row per physical vacuum-sealed bag, carrying its own `sealed_expiry`, `opened_expiry` and status. A database trigger applies the shelf-life rules on every write, so they hold no matter which client does the writing.
+
+**Two deliberate shapes worth knowing:**
+
+- `prep_checklist` is keyed by **(site, prep_date, sauce)**, not by session. It used to be seeded from the plan the moment staff pressed "Start", which meant a plan built afterwards never reached the kitchen and the checklist could silently drift from the plan it came from. Now the plan is the source of truth for *what to make* and a checklist row only records a *completion*, so the list can never come up empty when a plan exists.
+- `prep_plan_allocations` stores how much of each planned quantity is each restaurant's demand. The same number that decided how much to cook is the number the delivery run suggests sending, so the two cannot disagree.
 
 ---
 
@@ -236,7 +247,7 @@ For each sauce at each site, when planning the next prep day:
 2. **Burn rate** = total bags used ÷ days observed.
 3. **Day-of-week multipliers** — "Fridays use ~40% more Ranch than an average day". Clamped to `[0.5, 2]` and only applied once there's enough data, so one freak Saturday can't double a batch.
 4. Read **current usable stock** — sealed *and* opened bags both count.
-5. Work out **days this batch must cover** (3 for Tuesday, 4 for Friday).
+5. Work out **days this batch must cover** — the gap to the next prep day.
 6. **Projected need** = Σ (burn rate × that day's multiplier) across the covered days.
 7. **Suggested bags** = `max(0, ceil((projected need − usable stock) × 1.1))`, floored at the par gap where a manager has set a par level.
 8. **Low-stock flag** = current stock < burn rate × days until the next prep day.
@@ -349,14 +360,15 @@ src/
     (app)/                    Authenticated shell + every feature route
       dashboard/              Manager command centre
       today/                  Staff home — "what do I do right now?"
-      planner/                Forecast, overrides, reasoning drawer
-      prep/                   3-step checklist + blast-chill timer
+      planner/                One plan per prep day, with the per-restaurant split
+      prep/                   One-step checklist — volume made + bags
+      dispatch/               Delivery run to the receiving restaurants
       batches/                Batch history + prep-vs-plan
       usage/                  Daily usage logging + burn rate
       expiry/                 Expiry tracker (staff and manager views)
       alerts/                 Alerts centre with suggested actions
       overtime/               Hours worked + CSV export
-      settings/               Sauces, par levels, staff, app config
+      settings/               Prep days, prep kitchen, sauces, staff, app config
     api/
       cron/digest/            Daily 8am digest endpoint
       export/overtime/        Payroll CSV
@@ -393,7 +405,7 @@ Browse it at **`/gallery`** (works without signing in), in both light and dark m
 
 - **Tokens** — colours, spacing, radii, type scale, shadows, z-index and motion all live in `src/lib/design/tokens.ts`. Tailwind's config imports that file and injects the semantic CSS variables, so `bg-surface` / `text-ink-muted` flip themes with no `dark:` variants in feature code. There are no hardcoded hex values in components.
 - **Status palette** — Green = healthy (3+ days) · Amber = 1–2 days · Red = expiring today or expired. Colour is *never* the only signal: every status pill carries an icon or a dot plus words.
-- **Components** — buttons, inputs, custom dropdown (full listbox keyboard semantics + typeahead + search), custom calendar and range picker, toggles, checkboxes, radio groups, steppers, modals, drawers, bottom sheets, toasts, tabs, segmented controls, tables, badges, progress bars and rings, the blast-chill countdown, tooltips, and skeleton loaders for every async view.
+- **Components** — buttons, inputs, custom dropdown (full listbox keyboard semantics + typeahead + search), custom calendar and range picker, toggles, checkboxes, radio groups, steppers, modals, drawers, bottom sheets, toasts, tabs, segmented controls, tables, badges, progress bars and rings, tooltips, and skeleton loaders for every async view.
 - **Tablet first** — primary actions are 44–52px tall, thumb-reachable, and the bottom sheet is swipe-dismissable.
 - **Accessibility** — keyboard navigation throughout, focus trapping in overlays, roving tabindex in radio groups and tabs, ARIA roles on every custom control, and AA contrast on the status palette.
 - **Empty states** — every list and table has a designed empty state with a helpful message and a next action.
@@ -408,7 +420,7 @@ npm test
 
 `src/lib/forecast/engine.test.ts` covers the engine and the date rules it depends on:
 
-- Tuesday = 3-day cover, Friday = 4-day cover, and the days each batch actually spans
+- Coverage derived from the gap to the next prep day, including non-default prep weekdays
 - Sealed expiry (prep + 5) and the opened-bag rule, including a bag opened on day 4 correctly capping at the sealed date
 - Expiry colour bands — expired / today / 1–2 days / healthy
 - Normal forecast: burn rate → projected need → minus stock → buffer → rounded

@@ -81,6 +81,9 @@ const paths = {
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z M7 11V7a5 5 0 0 1 10 0v4',
   'arrow-left-right': 'M8 3 4 7l4 4 M4 7h16 M16 21l4-4-4-4 M20 17H4',
+  truck:
+    'M10 17h4V5H2v12h3 M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1 M7.5 19.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M17.5 19.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+  send: 'M22 2 11 13 M22 2l-7 20-4-9-9-4z',
 } as const
 
 export type IconName = keyof typeof paths

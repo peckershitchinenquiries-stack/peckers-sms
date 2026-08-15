@@ -45,7 +45,11 @@ async function main(): Promise<void> {
   const { data: sites, error: siteError } = await supabase
     .from('sites')
     .upsert(
-      SITE_SEEDS.map((site) => ({ name: site.name, slug: site.slug })),
+      SITE_SEEDS.map((site) => ({
+        name: site.name,
+        slug: site.slug,
+        is_prep_site: site.isPrepSite,
+      })),
       { onConflict: 'slug' },
     )
     .select('id, name, slug')

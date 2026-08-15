@@ -38,11 +38,5 @@ export { Table, type Column, type TableProps } from './Table'
 export { Skeleton, SkeletonCard, SkeletonList, SkeletonStatGrid } from './Skeleton'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { ProgressBar, ProgressRing, type ProgressBarProps } from './Progress'
-export {
-  BlastChillTimer,
-  useCountdown,
-  formatDuration,
-  type BlastChillTimerProps,
-} from './CountdownTimer'
 export { Tooltip, InfoHint, type TooltipProps } from './Tooltip'
 export { StatCard, Callout, type StatCardProps, type CalloutProps } from './StatCard'

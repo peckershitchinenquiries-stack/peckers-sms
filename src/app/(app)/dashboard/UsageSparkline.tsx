@@ -11,7 +11,13 @@ import { formatMl } from '@/lib/utils/volume'
  * Bar chart of volume used per day. Prep days are marked so the sawtooth of
  * "restock then burn down" is readable at a glance.
  */
-export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; ml: number }> }) {
+export function UsageSparkline({
+  data,
+  prepWeekdays,
+}: {
+  data: Array<{ date: DateOnly; ml: number }>
+  prepWeekdays: number[]
+}) {
   const asOf = today()
   const peak = Math.max(...data.map((day) => day.ml), 1)
   const average = data.length
@@ -33,7 +39,7 @@ export function UsageSparkline({ data }: { data: Array<{ date: DateOnly; ml: num
         </div>
 
         {data.map((day, index) => {
-          const prep = isPrepDay(day.date)
+          const prep = isPrepDay(day.date, prepWeekdays)
           const isToday = day.date === asOf
 
           return (

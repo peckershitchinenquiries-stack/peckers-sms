@@ -3,6 +3,7 @@ import 'server-only'
 import { redirect } from 'next/navigation'
 import { cache } from 'react'
 import { createServerSupabase } from '@/lib/supabase/server'
+import { DEFAULT_PREP_WEEKDAYS, normalisePrepWeekdays } from '@/lib/date'
 import type { AppSettings, Profile, Site } from '@/lib/types/database'
 
 export interface SessionContext {
@@ -11,6 +12,18 @@ export interface SessionContext {
   sites: Site[]
   settings: AppSettings
   isManager: boolean
+  /** Weekdays sauce is prepared on (0 = Sunday). Configurable in Settings. */
+  prepWeekdays: number[]
+  /**
+   * The kitchen that actually cooks sauce. Everything prep-related — planner,
+   * checklist, dispatch — belongs to this one site.
+   */
+  prepSite: Site | null
+  /**
+   * Whether this user has anything to do with preparing sauce. False for
+   * Hitchin staff, who only log usage.
+   */
+  canPrep: boolean
 }
 
 /**
@@ -39,23 +52,36 @@ export const getSessionContext = cache(async (): Promise<SessionContext | null> 
   const isManager = profile.role === 'manager'
   const allSites = sites ?? []
 
+  const resolvedSettings =
+    settings ??
+    ({
+      id: true,
+      timezone: 'Europe/London',
+      digest_hour: 8,
+      digest_recipients: [],
+      low_stock_alerts_enabled: true,
+      forecast_buffer: 1.1,
+      forecast_window_days: 28,
+      bag_sizes_ml: [300, 500, 1000, 2000],
+      prep_weekdays: [...DEFAULT_PREP_WEEKDAYS],
+      updated_at: new Date().toISOString(),
+    } satisfies AppSettings)
+
+  // Exactly one kitchen prepares sauce. If nothing is flagged (a database that
+  // predates the setting), fall back to the first site so the planner is never
+  // silently unreachable.
+  const prepSite = allSites.find((site) => site.is_prep_site) ?? allSites[0] ?? null
+
   return {
     profile,
     sites: isManager ? allSites : allSites.filter((site) => site.id === profile.site_id),
-    settings:
-      settings ??
-      ({
-        id: true,
-        timezone: 'Europe/London',
-        digest_hour: 8,
-        digest_recipients: [],
-        low_stock_alerts_enabled: true,
-        forecast_buffer: 1.1,
-        forecast_window_days: 28,
-        bag_sizes_ml: [300, 500, 1000, 2000],
-        updated_at: new Date().toISOString(),
-      } satisfies AppSettings),
+    settings: resolvedSettings,
     isManager,
+    prepWeekdays: normalisePrepWeekdays(resolvedSettings.prep_weekdays),
+    prepSite,
+    // A manager oversees prep wherever it happens; staff only if they work in
+    // the kitchen that cooks.
+    canPrep: isManager || (prepSite !== null && profile.site_id === prepSite.id),
   }
 })
 
@@ -71,6 +97,20 @@ export async function requireManager(): Promise<SessionContext> {
   const context = await requireSession()
   if (!context.isManager) redirect('/today')
   return context
+}
+
+/**
+ * Requires someone involved in preparing sauce.
+ *
+ * Hitchin doesn't cook, so its staff are sent home rather than shown an empty
+ * checklist they can never act on.
+ */
+export async function requirePrepAccess(): Promise<
+  SessionContext & { prepSite: Site }
+> {
+  const context = await requireSession()
+  if (!context.canPrep || !context.prepSite) redirect('/today')
+  return context as SessionContext & { prepSite: Site }
 }
 
 /**

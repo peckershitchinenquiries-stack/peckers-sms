@@ -45,6 +45,7 @@ export interface UsageLoggerProps {
   recent: UsageEntry[]
   dailyTotals: Array<{ date: DateOnly; ml: number }>
   isManager: boolean
+  prepWeekdays: number[]
 }
 
 export function UsageLogger({
@@ -57,6 +58,7 @@ export function UsageLogger({
   recent,
   dailyTotals,
   isManager,
+  prepWeekdays,
 }: UsageLoggerProps) {
   const router = useRouter()
   const { toast } = useToast()
@@ -67,8 +69,8 @@ export function UsageLogger({
   const [busy, startTransition] = React.useTransition()
 
   const asOf = today()
-  const daysToRestock = daysUntilNextPrep(asOf)
-  const nextPrep = nextPrepDayAfter(asOf)
+  const daysToRestock = daysUntilNextPrep(asOf, prepWeekdays)
+  const nextPrep = nextPrepDayAfter(asOf, prepWeekdays)
 
   // One row per sauce at the site being written to.
   const rows = React.useMemo(() => {

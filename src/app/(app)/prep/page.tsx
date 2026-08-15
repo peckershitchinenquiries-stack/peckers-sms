@@ -1,68 +1,60 @@
 import type { Metadata } from 'next'
 import { PageHeader } from '@/components/app/PageHeader'
 import { PrepChecklist } from './PrepChecklist'
-import { requireSession, resolveSiteScope } from '@/lib/auth'
-import { getPlan, getSessionForDate } from '@/lib/queries/planning'
+import { requirePrepAccess } from '@/lib/auth'
+import { getPrepBoard } from '@/lib/queries/planning'
 import { getSauces } from '@/lib/queries/catalogue'
-import { formatRelativeDay, isPrepDay, today, upcomingPrepDay } from '@/lib/date'
+import { describePrepDays, formatRelativeDay, isPrepDay, today, upcomingPrepDay } from '@/lib/date'
 
 export const metadata: Metadata = { title: 'Prep checklist' }
 
 export default async function PrepPage({
   searchParams,
 }: {
-  searchParams: { site?: string; date?: string }
+  searchParams: { date?: string }
 }) {
-  const context = await requireSession()
-
-  // A checklist belongs to one kitchen, so a manager scoped to "both" falls
-  // back to the first site.
-  const scoped = resolveSiteScope(context, searchParams.site)
-  const siteId = scoped ?? context.sites[0]?.id ?? null
+  // Sauce is prepared at one kitchen only, so there is nothing to choose here —
+  // and staff at a restaurant that doesn't cook never reach this page.
+  const context = await requirePrepAccess()
 
   const now = today()
   const requested =
-    searchParams.date && isPrepDay(searchParams.date) ? searchParams.date : undefined
-  const prepDate = requested ?? (isPrepDay(now) ? now : upcomingPrepDay(now).date)
-  const prepDay = upcomingPrepDay(prepDate)
+    searchParams.date && isPrepDay(searchParams.date, context.prepWeekdays)
+      ? searchParams.date
+      : undefined
+  const prepDay = upcomingPrepDay(requested ?? now, context.prepWeekdays)
 
-  const [session, plan, sauces] = siteId
-    ? await Promise.all([
-        getSessionForDate(siteId, prepDate),
-        getPlan(siteId, prepDate, context.settings.bag_sizes_ml),
-        getSauces(),
-      ])
-    : [null, null, []]
+  const [board, sauces] = await Promise.all([
+    getPrepBoard({
+      siteId: context.prepSite.id,
+      prepDate: prepDay.date,
+      coversDays: prepDay.coversDays,
+      bagSizesMl: context.settings.bag_sizes_ml,
+    }),
+    getSauces(),
+  ])
 
-  const site = context.sites.find((candidate) => candidate.id === siteId) ?? null
+  const isTodayPrep = prepDay.date === now
 
   return (
     <>
       <PageHeader
-        eyebrow={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} prep · ${prepDay.coversDays}-day cover`}
-        title={`Prep checklist — ${formatRelativeDay(prepDate)}`}
+        eyebrow={`${context.prepSite.name} · covers ${prepDay.coversDays} days`}
+        title={isTodayPrep ? "Today's prep" : `Prep — ${formatRelativeDay(prepDay.date)}`}
         description={
-          isPrepDay(now) && prepDate === now
-            ? 'Work down the list: cook, blast chill for 1.5 hours, then vacuum pack. Packing creates the bags and starts each 5-day clock.'
-            : `Prep runs 7–11am on Tuesdays and Fridays. This is the plan for ${formatRelativeDay(prepDate)}.`
+          isTodayPrep
+            ? 'Make each sauce, then record how much you made and the bags it went into. That starts the 5-day date on every bag.'
+            : `Sauce is prepared on ${describePrepDays(context.prepWeekdays)}. This is the list for ${formatRelativeDay(prepDay.date)}.`
         }
       />
 
       <PrepChecklist
-        siteId={siteId}
-        siteName={site?.name ?? 'No site'}
-        sites={context.sites}
-        prepDate={prepDate}
-        coversDays={prepDay.coversDays}
-        isToday={prepDate === now}
-        session={session}
-        plan={plan}
-        sauces={sauces.map((sauce) => ({
-          id: sauce.id,
-          name: sauce.name,
-        }))}
-        canManageSite={context.isManager}
+        board={board}
+        isToday={isTodayPrep}
+        siteName={context.prepSite.name}
+        sauces={sauces.map((sauce) => ({ id: sauce.id, name: sauce.name }))}
         bagSizesMl={context.settings.bag_sizes_ml}
+        isManager={context.isManager}
       />
     </>
   )

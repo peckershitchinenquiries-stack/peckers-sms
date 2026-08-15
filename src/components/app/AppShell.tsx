@@ -19,6 +19,11 @@ interface NavItem {
   icon: IconName
   /** Which roles see this entry. */
   roles: Array<'manager' | 'staff'>
+  /**
+   * Only shown to people involved in preparing sauce. Hitchin cooks nothing,
+   * so its staff get a four-item menu rather than screens they can't act on.
+   */
+  prepOnly?: boolean
   description: string
 }
 
@@ -28,7 +33,7 @@ const NAV: NavItem[] = [
     label: 'Dashboard',
     icon: 'layout-dashboard',
     roles: ['manager'],
-    description: 'Everything, both sites',
+    description: 'Everything, both restaurants',
   },
   {
     href: '/today',
@@ -42,28 +47,31 @@ const NAV: NavItem[] = [
     label: 'Prep planner',
     icon: 'sparkles',
     roles: ['manager'],
-    description: 'Forecast the next batch',
+    prepOnly: true,
+    description: 'How much to make',
   },
   {
     href: '/prep',
     label: 'Prep checklist',
     icon: 'chef-hat',
     roles: ['manager', 'staff'],
-    description: 'Cook, chill, pack',
+    prepOnly: true,
+    description: 'Record what you made',
   },
   {
-    href: '/batches',
-    label: 'Batch log',
-    icon: 'package',
+    href: '/dispatch',
+    label: 'Send to Hitchin',
+    icon: 'truck',
     roles: ['manager', 'staff'],
-    description: 'What was actually made',
+    prepOnly: true,
+    description: "Today's delivery run",
   },
   {
     href: '/usage',
     label: 'Daily usage',
     icon: 'clipboard-list',
     roles: ['manager', 'staff'],
-    description: 'Log bags opened',
+    description: 'Log what you used',
   },
   {
     href: '/expiry',
@@ -80,10 +88,19 @@ const NAV: NavItem[] = [
     description: 'Stock and expiry warnings',
   },
   {
+    href: '/batches',
+    label: 'Batch history',
+    icon: 'package',
+    roles: ['manager'],
+    prepOnly: true,
+    description: 'What was actually made',
+  },
+  {
     href: '/overtime',
     label: 'Overtime',
     icon: 'history',
     roles: ['manager', 'staff'],
+    prepOnly: true,
     description: 'Prep hours worked',
   },
   {
@@ -91,7 +108,7 @@ const NAV: NavItem[] = [
     label: 'Settings',
     icon: 'settings',
     roles: ['manager'],
-    description: 'Sauces, pars and staff',
+    description: 'Sauces, staff and prep days',
   },
 ]
 
@@ -99,6 +116,9 @@ export interface AppShellProps {
   profile: Profile
   sites: Site[]
   isManager: boolean
+  /** Whether this person has anything to do with preparing sauce. */
+  canPrep: boolean
+  prepWeekdays: number[]
   unresolvedAlerts: number
   children: React.ReactNode
 }
@@ -107,6 +127,8 @@ export function AppShell({
   profile,
   sites,
   isManager,
+  canPrep,
+  prepWeekdays,
   unresolvedAlerts,
   children,
 }: AppShellProps) {
@@ -114,15 +136,18 @@ export function AppShell({
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false)
 
   const items = React.useMemo(
-    () => NAV.filter((item) => item.roles.includes(profile.role)),
-    [profile.role],
+    () =>
+      NAV.filter(
+        (item) => item.roles.includes(profile.role) && (!item.prepOnly || canPrep),
+      ),
+    [profile.role, canPrep],
   )
 
   // Any route change closes the mobile drawer.
   React.useEffect(() => setMobileNavOpen(false), [pathname])
   useEscapeKey(() => setMobileNavOpen(false), mobileNavOpen)
 
-  const nextPrep = upcomingPrepDay()
+  const nextPrep = upcomingPrepDay(undefined, prepWeekdays)
 
   return (
     <div className="min-h-dvh bg-canvas">
@@ -156,12 +181,12 @@ export function AppShell({
 
         <div className="border-t border-border p-3">
           <div className="rounded-lg bg-surface-sunken p-3">
-            <p className="eyebrow">Next prep</p>
+            <p className="eyebrow">{canPrep ? 'Next prep' : 'Next delivery'}</p>
             <p className="mt-1 text-sm font-semibold text-ink">
               {formatRelativeDay(nextPrep.date)}
             </p>
             <p className="mt-0.5 text-xs text-ink-muted">
-              {nextPrep.coversDays}-day cover · 7–11am
+              has to last {nextPrep.coversDays} days
             </p>
           </div>
         </div>

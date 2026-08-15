@@ -260,6 +260,36 @@ export async function resetStaffPassword(input: {
 /* App settings                                                               */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Chooses which restaurant prepares sauce.
+ *
+ * Exactly one site cooks — everywhere else receives deliveries — so this
+ * clears the flag elsewhere rather than adding another prep kitchen.
+ */
+export async function setPrepSite(siteId: string): Promise<ActionResult> {
+  try {
+    await requireManager()
+    const supabase = createServerSupabase()
+
+    const { error: clearError } = await supabase
+      .from('sites')
+      .update({ is_prep_site: false })
+      .neq('id', siteId)
+    if (clearError) throw new Error(clearError.message)
+
+    const { error } = await supabase
+      .from('sites')
+      .update({ is_prep_site: true })
+      .eq('id', siteId)
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/', 'layout')
+    return ok()
+  } catch (error) {
+    return fail(error, 'Could not change the prep kitchen.')
+  }
+}
+
 export async function updateAppSettings(input: {
   timezone?: string
   digestHour?: number
@@ -268,6 +298,7 @@ export async function updateAppSettings(input: {
   forecastBuffer?: number
   forecastWindowDays?: number
   bagSizesMl?: number[]
+  prepWeekdays?: number[]
 }): Promise<ActionResult> {
   try {
     await requireManager()
@@ -312,12 +343,25 @@ export async function updateAppSettings(input: {
       }
       patch.bag_sizes_ml = sizes
     }
+    if (input.prepWeekdays !== undefined) {
+      const days = [...new Set(input.prepWeekdays)].sort((a, b) => a - b)
+      const valid =
+        days.length > 0 &&
+        days.length <= 7 &&
+        days.every((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      if (!valid) {
+        return fail(new Error('Choose at least one prep day.'))
+      }
+      patch.prep_weekdays = days
+    }
 
     const supabase = createServerSupabase()
     const { error } = await supabase.from('app_settings').update(patch).eq('id', true)
     if (error) throw new Error(error.message)
 
-    revalidatePath('/settings')
+    // Prep days change what every screen calls "today's plan", so the whole
+    // app is revalidated rather than just this page.
+    revalidatePath('/', 'layout')
     return ok()
   } catch (error) {
     return fail(error, 'Could not save settings.')

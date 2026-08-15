@@ -17,6 +17,7 @@ export async function scanForAlerts(): Promise<
     const report = await runAlertScan(supabase, {
       sites: context.sites.map((site) => ({ id: site.id, name: site.name })),
       windowDays: context.settings.forecast_window_days,
+      prepWeekdays: context.prepWeekdays,
     })
 
     revalidatePath('/alerts')

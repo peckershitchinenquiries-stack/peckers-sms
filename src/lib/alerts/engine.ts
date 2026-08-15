@@ -79,11 +79,11 @@ export async function scanLowStock(
   supabase: SupabaseClient,
   site: { id: string; name: string },
   otherSiteName: string | null,
-  options: { windowDays: number; asOf?: DateOnly },
+  options: { windowDays: number; asOf?: DateOnly; prepWeekdays?: number[] },
 ): Promise<AlertDraft[]> {
   const asOf = options.asOf ?? today()
-  const daysToRestock = daysUntilNextPrep(asOf)
-  const nextPrep = nextPrepDayAfter(asOf)
+  const daysToRestock = daysUntilNextPrep(asOf, options.prepWeekdays)
+  const nextPrep = nextPrepDayAfter(asOf, options.prepWeekdays)
 
   const { data, error } = await supabase.rpc('forecast_inputs', {
     p_site_id: site.id,
@@ -240,7 +240,7 @@ export async function scanExpiry(
 export async function scanPatterns(
   supabase: SupabaseClient,
   site: { id: string; name: string },
-  options: { windowDays: number; asOf?: DateOnly },
+  options: { windowDays: number; asOf?: DateOnly; prepWeekdays?: number[] },
 ): Promise<AlertDraft[]> {
   const asOf = options.asOf ?? today()
   const windowDays = Math.max(28, options.windowDays)
@@ -331,6 +331,7 @@ export async function runAlertScan(
     windowDays?: number
     asOf?: DateOnly
     includePatterns?: boolean
+    prepWeekdays?: number[]
   },
 ): Promise<ScanReport> {
   const windowDays = options.windowDays ?? 28
@@ -341,7 +342,11 @@ export async function runAlertScan(
     const otherSite = options.sites.find((candidate) => candidate.id !== site.id) ?? null
 
     const [lowStock, expiry, patterns] = await Promise.all([
-      scanLowStock(supabase, site, otherSite?.name ?? null, { windowDays, asOf }),
+      scanLowStock(supabase, site, otherSite?.name ?? null, {
+        windowDays,
+        asOf,
+        prepWeekdays: options.prepWeekdays,
+      }),
       scanExpiry(supabase, site, { asOf }),
       options.includePatterns === false
         ? Promise.resolve([])

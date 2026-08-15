@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { PageHeader } from '@/components/app/PageHeader'
 import { BatchLog } from './BatchLog'
-import { requireSession, resolveSiteScope } from '@/lib/auth'
+import { requireManager, resolveSiteScope } from '@/lib/auth'
 import { getBatchHistory } from '@/lib/queries/activity'
 import { getPrepVsPlan } from '@/lib/queries/planning'
 import { getSauces } from '@/lib/queries/catalogue'
@@ -14,7 +14,7 @@ export default async function BatchesPage({
 }: {
   searchParams: { site?: string; from?: string; to?: string; sauce?: string }
 }) {
-  const context = await requireSession()
+  const context = await requireManager()
   const scoped = resolveSiteScope(context, searchParams.site)
   const writeSiteId = scoped ?? context.sites[0]?.id ?? null
 
@@ -48,6 +48,7 @@ export default async function BatchesPage({
         }))}
         range={{ from, to }}
         bagSizesMl={context.settings.bag_sizes_ml}
+        prepWeekdays={context.prepWeekdays}
       />
     </>
   )

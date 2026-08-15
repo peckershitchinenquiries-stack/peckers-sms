@@ -40,9 +40,9 @@ export default async function DashboardPage({
   const siteId = resolveSiteScope(context, searchParams.site)
   const asOf = today()
 
-  const prepDay = upcomingPrepDay(asOf)
-  const nextRestock = nextPrepDayAfter(asOf)
-  const lastPrep = lastPrepDayOnOrBefore(asOf)
+  const prepDay = upcomingPrepDay(asOf, context.prepWeekdays)
+  const nextRestock = nextPrepDayAfter(asOf, context.prepWeekdays)
+  const lastPrep = lastPrepDayOnOrBefore(asOf, context.prepWeekdays)
 
   const [stock, bags, alerts, usageTotals, comparison] = await Promise.all([
     getLiveStock(siteId),
@@ -144,8 +144,8 @@ export default async function DashboardPage({
         />
         <StatCard
           label="Next prep"
-          value={daysUntilNextPrep(asOf)}
-          unit={daysUntilNextPrep(asOf) === 1 ? 'day' : 'days'}
+          value={daysUntilNextPrep(asOf, context.prepWeekdays)}
+          unit={daysUntilNextPrep(asOf, context.prepWeekdays) === 1 ? 'day' : 'days'}
           icon="chef-hat"
           tone="neutral"
           hint={`${formatShort(nextRestock.date)} · ${nextRestock.coversDays}-day cover`}
@@ -158,7 +158,7 @@ export default async function DashboardPage({
         {/* ---------------------------------------------------------------- */}
         <Card className="xl:col-span-2">
           <CardHeader
-            eyebrow={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} batch · ${prepDay.coversDays}-day cover`}
+            eyebrow={`Next batch · has to last ${prepDay.coversDays} days`}
             title={`Forecast for ${formatShort(prepDay.date)}`}
             description={`${formatMl(suggestedTotalMl)} suggested across ${forecastSites.length === 1 ? 'this kitchen' : 'both kitchens'}, based on a ${context.settings.forecast_window_days}-day rolling window.`}
             actions={
@@ -356,8 +356,7 @@ export default async function DashboardPage({
           <div className="mt-5 border-t border-border pt-5">
             <p className="eyebrow mb-2">Last prep day</p>
             <p className="text-sm text-ink-muted">
-              {formatShort(lastPrep.date)} · {lastPrep.type === 'tuesday' ? 'Tuesday' : 'Friday'}{' '}
-              batch covering {lastPrep.coversDays} days
+              {formatShort(lastPrep.date)} · batch covering {lastPrep.coversDays} days
             </p>
           </div>
         </Card>
@@ -377,7 +376,7 @@ export default async function DashboardPage({
             </LinkButton>
           }
         />
-        <UsageSparkline data={usageTotals} />
+        <UsageSparkline data={usageTotals} prepWeekdays={context.prepWeekdays} />
       </Card>
 
       {lowStockSauces.length > 0 ? (

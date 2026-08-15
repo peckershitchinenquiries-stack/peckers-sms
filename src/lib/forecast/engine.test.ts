@@ -11,6 +11,7 @@ import {
 import {
   addDaysTo,
   expiryStatus,
+  isPrepDay,
   openedExpiryFor,
   sealedExpiryFor,
   upcomingPrepDay,
@@ -49,14 +50,12 @@ function baseInput(overrides: Partial<ForecastInput> = {}): ForecastInput {
 /* -------------------------------------------------------------------------- */
 
 describe('date rules', () => {
-  it('treats Tuesday as a 3-day batch and Friday as a 4-day batch', () => {
+  it('derives coverage from the gap to the next prep day', () => {
     const tuesday = upcomingPrepDay(TUESDAY)
-    expect(tuesday.type).toBe('tuesday')
     expect(tuesday.coversDays).toBe(3)
     expect(tuesday.coverageDates).toEqual(['2026-08-04', '2026-08-05', '2026-08-06'])
 
     const friday = upcomingPrepDay(FRIDAY)
-    expect(friday.type).toBe('friday')
     expect(friday.coversDays).toBe(4)
     expect(friday.coverageDates).toEqual([
       '2026-08-07',
@@ -64,6 +63,24 @@ describe('date rules', () => {
       '2026-08-09',
       '2026-08-10',
     ])
+  })
+
+  it('follows whatever prep days the manager configured', () => {
+    // Monday + Thursday instead of Tuesday + Friday.
+    const days = [1, 4]
+
+    expect(isPrepDay(TUESDAY, days)).toBe(false)
+    expect(isPrepDay('2026-08-03', days)).toBe(true) // Monday
+
+    // Monday -> Thursday is a 3-day batch; Thursday -> Monday is a 4-day one.
+    expect(upcomingPrepDay('2026-08-03', days).coversDays).toBe(3)
+    expect(upcomingPrepDay('2026-08-06', days).coversDays).toBe(4)
+
+    // A single prep day a week means one batch has to cover all seven.
+    expect(upcomingPrepDay('2026-08-03', [1]).coversDays).toBe(7)
+
+    // An empty or invalid set falls back rather than throwing.
+    expect(isPrepDay(TUESDAY, [])).toBe(true)
   })
 
   it('finds the upcoming prep day inclusively but the next one exclusively', () => {

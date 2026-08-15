@@ -105,66 +105,92 @@ export const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] a
 /* Prep-day rules                                                             */
 /* -------------------------------------------------------------------------- */
 
-export type PrepType = 'tuesday' | 'friday'
-
-export const TUESDAY = 2
-export const FRIDAY = 5
-
 /**
- * Business rule:
- *  - Tuesday's batch must cover Tue, Wed, Thu  → 3 days
- *  - Friday's batch must cover Fri, Sat, Sun, Mon → 4 days
+ * Which weekdays sauce is prepared on, as `extract(dow)` numbers
+ * (0 = Sunday … 6 = Saturday).
+ *
+ * Tuesday and Friday today, but the manager changes this in Settings, so every
+ * function below takes the current set rather than assuming it. This default
+ * exists only so callers that genuinely have no settings to hand (tests, the
+ * seed scripts) still behave sensibly.
  */
-export const COVERAGE_DAYS: Record<PrepType, 3 | 4> = {
-  tuesday: 3,
-  friday: 4,
+export type PrepWeekdays = readonly number[]
+
+export const DEFAULT_PREP_WEEKDAYS: PrepWeekdays = [2, 5]
+
+/** Sorted, de-duplicated and range-checked. Falls back to the default if empty. */
+export function normalisePrepWeekdays(weekdays: PrepWeekdays | null | undefined): number[] {
+  const cleaned = [...new Set(weekdays ?? [])]
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    .sort((a, b) => a - b)
+  return cleaned.length > 0 ? cleaned : [...DEFAULT_PREP_WEEKDAYS]
 }
 
 export interface PrepDay {
   date: DateOnly
-  type: PrepType
-  /** How many days of demand this batch has to satisfy (3 or 4). */
-  coversDays: 3 | 4
+  /** How many days of demand this batch has to satisfy, until the next prep day. */
+  coversDays: number
   /** The exact calendar dates this batch covers, starting on the prep day. */
   coverageDates: DateOnly[]
 }
 
-function prepDayFrom(date: DateOnly): PrepDay {
-  const dow = weekdayOf(date)
-  const type: PrepType = dow === TUESDAY ? 'tuesday' : 'friday'
-  const coversDays = COVERAGE_DAYS[type]
+/**
+ * How many days a batch made on `date` has to last.
+ *
+ * Simply the gap to the next prep day — with Tue/Fri that yields the familiar
+ * 3 (Tue→Fri) and 4 (Fri→Tue), and it stays correct for any other set the
+ * manager picks.
+ */
+function coverageFor(date: DateOnly, weekdays: number[]): number {
+  for (let offset = 1; offset <= 7; offset += 1) {
+    if (weekdays.includes(weekdayOf(addDaysTo(date, offset)))) return offset
+  }
+  /* istanbul ignore next — at least one prep weekday always exists. */
+  return 7
+}
+
+function prepDayFrom(date: DateOnly, weekdays: number[]): PrepDay {
+  const coversDays = coverageFor(date, weekdays)
   return {
     date,
-    type,
     coversDays,
     coverageDates: Array.from({ length: coversDays }, (_, i) => addDaysTo(date, i)),
   }
 }
 
-/** True when the given date is a Tuesday or Friday. */
-export function isPrepDay(date: DateOnly): boolean {
-  const dow = weekdayOf(date)
-  return dow === TUESDAY || dow === FRIDAY
+/** True when sauce is prepared on the given date. */
+export function isPrepDay(
+  date: DateOnly,
+  weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS,
+): boolean {
+  return normalisePrepWeekdays(weekdays).includes(weekdayOf(date))
 }
 
 /**
  * The prep day we are currently planning for.
  *
- * Inclusive: if `from` is itself a Tuesday or Friday, that day is returned —
- * on a prep morning the plan you care about is today's.
+ * Inclusive: if `from` is itself a prep day, that day is returned — on a prep
+ * morning the plan you care about is today's.
  */
-export function upcomingPrepDay(from: DateOnly = today()): PrepDay {
+export function upcomingPrepDay(
+  from: DateOnly = today(),
+  weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS,
+): PrepDay {
+  const days = normalisePrepWeekdays(weekdays)
   for (let offset = 0; offset < 8; offset += 1) {
     const candidate = addDaysTo(from, offset)
-    if (isPrepDay(candidate)) return prepDayFrom(candidate)
+    if (days.includes(weekdayOf(candidate))) return prepDayFrom(candidate, days)
   }
   /* istanbul ignore next — a prep day always falls within 7 days. */
   throw new Error(`No prep day found within a week of ${from}`)
 }
 
 /** The next prep day strictly after `from` — i.e. the next restock event. */
-export function nextPrepDayAfter(from: DateOnly = today()): PrepDay {
-  return upcomingPrepDay(addDaysTo(from, 1))
+export function nextPrepDayAfter(
+  from: DateOnly = today(),
+  weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS,
+): PrepDay {
+  return upcomingPrepDay(addDaysTo(from, 1), weekdays)
 }
 
 /**
@@ -173,18 +199,32 @@ export function nextPrepDayAfter(from: DateOnly = today()): PrepDay {
  * Counted to the *next* prep day after today, because today's prep (if any)
  * has either already happened or is happening now.
  */
-export function daysUntilNextPrep(from: DateOnly = today()): number {
-  return daysBetween(from, nextPrepDayAfter(from).date)
+export function daysUntilNextPrep(
+  from: DateOnly = today(),
+  weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS,
+): number {
+  return daysBetween(from, nextPrepDayAfter(from, weekdays).date)
 }
 
 /** The most recent prep day on or before `from`. */
-export function lastPrepDayOnOrBefore(from: DateOnly = today()): PrepDay {
+export function lastPrepDayOnOrBefore(
+  from: DateOnly = today(),
+  weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS,
+): PrepDay {
+  const days = normalisePrepWeekdays(weekdays)
   for (let offset = 0; offset < 8; offset += 1) {
     const candidate = addDaysTo(from, -offset)
-    if (isPrepDay(candidate)) return prepDayFrom(candidate)
+    if (days.includes(weekdayOf(candidate))) return prepDayFrom(candidate, days)
   }
   /* istanbul ignore next */
   throw new Error(`No prep day found within a week before ${from}`)
+}
+
+/** "Tuesdays and Fridays" — the prep schedule in words, for headers and hints. */
+export function describePrepDays(weekdays: PrepWeekdays = DEFAULT_PREP_WEEKDAYS): string {
+  const names = normalisePrepWeekdays(weekdays).map((day) => `${WEEKDAY_NAMES[day]}s`)
+  if (names.length === 1) return names[0]
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
 /* -------------------------------------------------------------------------- */
@@ -196,9 +236,6 @@ export const SEALED_SHELF_LIFE_DAYS = 5
 
 /** Once opened, a bag lasts 2 days from the moment it was opened. */
 export const OPENED_SHELF_LIFE_DAYS = 2
-
-/** Blast chill hold time before vacuum packing. */
-export const BLAST_CHILL_MINUTES = 90
 
 export function sealedExpiryFor(prepDate: DateOnly): DateOnly {
   return addDaysTo(prepDate, SEALED_SHELF_LIFE_DAYS)

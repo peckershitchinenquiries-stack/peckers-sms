@@ -4,7 +4,7 @@ import { requireSession } from '@/lib/auth'
 import { createServerSupabase } from '@/lib/supabase/server'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const { profile, sites, isManager } = await requireSession()
+  const { profile, sites, isManager, canPrep, prepWeekdays } = await requireSession()
 
   const supabase = createServerSupabase()
   const { count } = await supabase
@@ -20,6 +20,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         profile={profile}
         sites={sites}
         isManager={isManager}
+        canPrep={canPrep}
+        prepWeekdays={prepWeekdays}
         unresolvedAlerts={count ?? 0}
       >
         {children}

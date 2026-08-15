@@ -42,6 +42,7 @@ export interface BatchLogProps {
   sauces: Array<{ id: string; name: string }>
   range: { from: DateOnly; to: DateOnly }
   bagSizesMl: number[]
+  prepWeekdays: number[]
 }
 
 export function BatchLog({
@@ -53,6 +54,7 @@ export function BatchLog({
   sauces,
   range,
   bagSizesMl,
+  prepWeekdays,
 }: BatchLogProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -224,7 +226,7 @@ export function BatchLog({
                 <div>
                   <span className="font-medium text-ink">{formatShort(row.prepDate)}</span>
                   <span className="block text-2xs text-ink-subtle">
-                    {isPrepDay(row.prepDate) ? 'Scheduled prep' : 'Off-cycle'}
+                    {isPrepDay(row.prepDate, prepWeekdays) ? 'Scheduled prep' : 'Off-cycle'}
                   </span>
                 </div>
               ),
@@ -329,8 +331,8 @@ export function BatchLog({
                 cell: (row) => (
                   <div>
                     <span className="font-medium text-ink">{formatShort(row.prep_date)}</span>
-                    <span className="block text-2xs capitalize text-ink-subtle">
-                      {row.prep_type} · {row.prep_type === 'tuesday' ? '3' : '4'}-day cover
+                    <span className="block text-2xs text-ink-subtle">
+                      had to last {row.covers_days} days
                     </span>
                   </div>
                 ),
@@ -431,6 +433,7 @@ export function BatchLog({
             value={form.prepDate}
             onChange={(prepDate) => setForm((current) => ({ ...current, prepDate }))}
             highlightPrepDays
+            prepWeekdays={prepWeekdays}
             hint={`Bags will be sealed until ${formatShort(sealedExpiryFor(form.prepDate))}.`}
           />
 

@@ -31,7 +31,7 @@ export default async function UsagePage({
       <PageHeader
         eyebrow="Stock"
         title="Daily usage"
-        description="Log the bags you open as you go. Opening a bag starts its 2-day countdown and keeps the forecast honest."
+        description="Log how much of each sauce you got through today. This is what the next batch is worked out from, so it matters."
       />
 
       <UsageLogger
@@ -44,6 +44,7 @@ export default async function UsagePage({
         recent={recent}
         dailyTotals={dailyTotals}
         isManager={context.isManager}
+        prepWeekdays={context.prepWeekdays}
       />
     </>
   )

@@ -25,16 +25,17 @@ import {
   createStaffAccount,
   resetStaffPassword,
   setParLevel,
+  setPrepSite,
   setSauceActive,
   updateAppSettings,
   updateStaffAccount,
   upsertSauce,
 } from '@/lib/actions/settings'
-import { APP_TIMEZONE, formatDateOnly } from '@/lib/date'
+import { APP_TIMEZONE, describePrepDays, formatDateOnly, normalisePrepWeekdays } from '@/lib/date'
 import { formatMl } from '@/lib/utils/volume'
 import type { AppSettings, ParLevel, Profile, Sauce, Site } from '@/lib/types/database'
 
-type Tab = 'sauces' | 'pars' | 'staff' | 'app'
+type Tab = 'prep' | 'sauces' | 'pars' | 'staff' | 'app'
 
 export interface SettingsPanelProps {
   sauces: Sauce[]
@@ -53,7 +54,7 @@ export function SettingsPanel({
   settings,
   currentProfileId,
 }: SettingsPanelProps) {
-  const [tab, setTab] = React.useState<Tab>('sauces')
+  const [tab, setTab] = React.useState<Tab>('prep')
 
   return (
     <div className="space-y-6">
@@ -62,13 +63,15 @@ export function SettingsPanel({
         value={tab}
         onChange={(value) => setTab(value as Tab)}
         items={[
+          { value: 'prep', label: 'Prep days', icon: 'calendar' },
           { value: 'sauces', label: 'Sauces', icon: 'droplet', count: sauces.filter((s) => s.active).length },
-          { value: 'pars', label: 'Par levels', icon: 'scale' },
+          { value: 'pars', label: 'Minimum stock', icon: 'scale' },
           { value: 'staff', label: 'Staff', icon: 'users', count: staff.filter((s) => s.active).length },
-          { value: 'app', label: 'App & alerts', icon: 'settings' },
+          { value: 'app', label: 'Advanced', icon: 'settings' },
         ]}
       />
 
+      {tab === 'prep' ? <PrepTab settings={settings} sites={sites} /> : null}
       {tab === 'sauces' ? <SaucesTab sauces={sauces} /> : null}
       {tab === 'pars' ? <ParsTab sauces={sauces} parLevels={parLevels} sites={sites} /> : null}
       {tab === 'staff' ? (
@@ -76,6 +79,181 @@ export function SettingsPanel({
       ) : null}
       {tab === 'app' ? <AppTab settings={settings} /> : null}
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Prep days and the prep kitchen                                             */
+/* -------------------------------------------------------------------------- */
+
+/** Monday-first, because that is how a rota is read. */
+const WEEKDAY_PICKER = [
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+  { value: 6, label: 'Sat' },
+  { value: 0, label: 'Sun' },
+]
+
+function PrepTab({ settings, sites }: { settings: AppSettings; sites: Site[] }) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [busy, startTransition] = React.useTransition()
+
+  const [days, setDays] = React.useState<number[]>(() =>
+    normalisePrepWeekdays(settings.prep_weekdays),
+  )
+
+  const saved = normalisePrepWeekdays(settings.prep_weekdays)
+  const dirty =
+    days.length !== saved.length || days.some((day, index) => day !== saved[index])
+
+  const toggleDay = (day: number) => {
+    setDays((current) =>
+      current.includes(day)
+        ? current.filter((value) => value !== day)
+        : [...current, day].sort((a, b) => a - b),
+    )
+  }
+
+  const save = () => {
+    startTransition(async () => {
+      const result = await updateAppSettings({ prepWeekdays: days })
+      if (result.ok) {
+        toast({
+          tone: 'success',
+          title: 'Prep days updated',
+          description: `Sauce is now prepared on ${describePrepDays(days)}.`,
+        })
+        router.refresh()
+      } else {
+        toast({ tone: 'danger', title: 'Could not save', description: result.error })
+      }
+    })
+  }
+
+  const prepSite = sites.find((site) => site.is_prep_site) ?? null
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader
+          eyebrow="Schedule"
+          title="Which days is sauce prepared?"
+          description="Change this whenever the rota changes. The planner, the kitchen checklist and every “next delivery” date follow it straight away."
+        />
+
+        <div className="flex flex-wrap gap-2">
+          {WEEKDAY_PICKER.map((day) => {
+            const selected = days.includes(day.value)
+            return (
+              <button
+                key={day.value}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => toggleDay(day.value)}
+                className={`h-tap min-w-[4.25rem] rounded-lg border-2 px-3 text-sm font-semibold transition-colors duration-fast focus-ring ${
+                  selected
+                    ? 'border-brand bg-brand-soft text-brand-on-soft'
+                    : 'border-border bg-surface text-ink-muted hover:border-border-strong hover:text-ink'
+                }`}
+              >
+                {day.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <p className="mt-4 text-sm text-ink-muted">
+          {days.length === 0 ? (
+            <span className="text-danger">Pick at least one day.</span>
+          ) : (
+            <>
+              Sauce is prepared on <strong className="text-ink">{describePrepDays(days)}</strong>.
+              Each batch has to last until the next prep day.
+            </>
+          )}
+        </p>
+
+        <div className="mt-5">
+          <Button
+            size="lg"
+            leadingIcon="check"
+            loading={busy}
+            disabled={days.length === 0 || !dirty}
+            onClick={save}
+          >
+            {dirty ? 'Save prep days' : 'Saved'}
+          </Button>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          eyebrow="Location"
+          title="Where is sauce prepared?"
+          description="Only this restaurant sees the planner, the prep checklist and the delivery run. Everywhere else just logs what it uses."
+        />
+
+        <div className="space-y-2.5">
+          {sites.map((site) => (
+            <PrepSiteOption key={site.id} site={site} selected={site.id === prepSite?.id} />
+          ))}
+        </div>
+
+        <p className="mt-4 text-xs leading-relaxed text-ink-subtle">
+          Sauce made here is delivered out to the others. Staff at a receiving restaurant only ever
+          see their daily usage, stock and expiry dates.
+        </p>
+      </Card>
+    </div>
+  )
+}
+
+function PrepSiteOption({ site, selected }: { site: Site; selected: boolean }) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [busy, startTransition] = React.useTransition()
+
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      disabled={selected || busy}
+      onClick={() =>
+        startTransition(async () => {
+          const result = await setPrepSite(site.id)
+          if (result.ok) {
+            toast({ tone: 'success', title: `${site.name} now prepares the sauce` })
+            router.refresh()
+          } else {
+            toast({ tone: 'danger', title: 'Could not change', description: result.error })
+          }
+        })
+      }
+      className={`flex w-full items-center gap-3 rounded-lg border-2 p-4 text-left transition-colors duration-fast focus-ring disabled:cursor-default ${
+        selected
+          ? 'border-brand bg-brand-soft'
+          : 'border-border bg-surface hover:border-border-strong'
+      }`}
+    >
+      <Icon
+        name={selected ? 'chef-hat' : 'map-pin'}
+        size={18}
+        className={selected ? 'text-brand' : 'text-ink-muted'}
+      />
+      <span className="min-w-0 flex-1">
+        <span className={`block text-sm font-semibold ${selected ? 'text-brand-on-soft' : 'text-ink'}`}>
+          {site.name}
+        </span>
+        <span className="block text-xs text-ink-muted">
+          {selected ? 'Prepares sauce and delivers it out' : 'Receives deliveries'}
+        </span>
+      </span>
+      {selected ? <Icon name="check" size={17} className="text-brand" /> : null}
+    </button>
   )
 }
 
@@ -347,8 +525,8 @@ function ParsTab({
         <CardHeader
           className="mb-0"
           eyebrow="Target stock"
-          title="Par levels per sauce, per site"
-          description="The forecast uses par as a floor: if the calculated need is lower, it tops stock up to par instead. Set it to 0 to let the burn rate decide entirely."
+          title="Minimum stock per sauce, per restaurant"
+          description="A safety net: if the forecast asks for less than this, it tops up to this amount instead. Leave it at 0 to let usage decide entirely."
         />
       </div>
 
@@ -871,17 +1049,15 @@ function AppTab({ settings }: { settings: AppSettings }) {
       <Card>
         <CardHeader
           eyebrow="Fixed rules"
-          title="Business rules"
-          description="These are baked into the schema and the engine — they aren't configurable by design."
+          title="Shelf life"
+          description="These are enforced by the database itself, so they hold no matter who logs what."
         />
         <dl className="space-y-3">
           {[
-            ['Prep days', 'Tuesday and Friday, 7–11am (paid overtime)'],
-            ['Tuesday batch', 'Must cover 3 days — Tue, Wed, Thu'],
-            ['Friday batch', 'Must cover 4 days — Fri, Sat, Sun, Mon'],
-            ['Sealed shelf life', '5 days from the prep date'],
-            ['Opened shelf life', '2 days, never beyond the sealed date'],
-            ['Blast chill', '1.5 hour hold between cooking and packing'],
+            ['Sealed bag', '5 days from the day it was made'],
+            ['Once opened', '2 days, never beyond the sealed date'],
+            ['Coverage', 'Each batch must last until the next prep day'],
+            ['Prep hours', 'Recorded from start to finish on the prep screen'],
           ].map(([term, definition]) => (
             <div key={term} className="flex items-baseline justify-between gap-4 border-b border-border pb-3 last:border-0 last:pb-0">
               <dt className="text-sm font-medium text-ink">{term}</dt>

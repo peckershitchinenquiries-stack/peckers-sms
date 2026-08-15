@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { PageHeader } from '@/components/app/PageHeader'
 import { requireSession } from '@/lib/auth'
 import { getLiveStock, getTrackedBags, summariseExpiry } from '@/lib/queries/stock'
-import { getPlan, getSessionForDate } from '@/lib/queries/planning'
+import { getPrepBoard } from '@/lib/queries/planning'
 import { getUsageForDate } from '@/lib/queries/activity'
 import {
   daysUntilNextPrep,
@@ -14,7 +14,6 @@ import {
   upcomingPrepDay,
 } from '@/lib/date'
 import {
-  Badge,
   Callout,
   Card,
   CardHeader,
@@ -32,6 +31,9 @@ export const metadata: Metadata = { title: 'Today' }
 /**
  * The kitchen's home screen. One question it must answer instantly:
  * "what do I do right now?"
+ *
+ * That answer differs by restaurant: the prep kitchen may have a batch to
+ * make, while a receiving restaurant only ever logs what it used.
  */
 export default async function TodayPage() {
   const context = await requireSession()
@@ -42,22 +44,28 @@ export default async function TodayPage() {
     return (
       <EmptyState
         icon="map-pin"
-        title="No kitchen assigned"
-        description="Your account isn't linked to a site yet. Ask your manager to set this up in Settings → Staff."
+        title="No restaurant assigned"
+        description="Your account isn't linked to a restaurant yet. Ask your manager to set this up in Settings → Staff."
       />
     )
   }
 
-  const isPrepToday = isPrepDay(asOf)
-  const prepDay = upcomingPrepDay(asOf)
-  const nextRestock = nextPrepDayAfter(asOf)
+  const isPrepToday = context.canPrep && isPrepDay(asOf, context.prepWeekdays)
+  const prepDay = upcomingPrepDay(asOf, context.prepWeekdays)
+  const nextRestock = nextPrepDayAfter(asOf, context.prepWeekdays)
 
-  const [bags, stock, session, plan, loggedToday] = await Promise.all([
+  const [bags, stock, loggedToday, prepBoard] = await Promise.all([
     getTrackedBags({ siteId }),
     getLiveStock(siteId),
-    isPrepToday ? getSessionForDate(siteId, asOf) : Promise.resolve(null),
-    getPlan(siteId, prepDay.date, context.settings.bag_sizes_ml),
     getUsageForDate(siteId, asOf),
+    context.canPrep && context.prepSite
+      ? getPrepBoard({
+          siteId: context.prepSite.id,
+          prepDate: prepDay.date,
+          coversDays: prepDay.coversDays,
+          bagSizesMl: context.settings.bag_sizes_ml,
+        })
+      : Promise.resolve(null),
   ])
 
   const expiry = summariseExpiry(bags)
@@ -65,10 +73,12 @@ export default async function TodayPage() {
   const loggedMl = Array.from(loggedToday.values()).reduce((sum, value) => sum + value, 0)
   const belowPar = stock.filter((row) => row.par_level_ml > 0 && row.usable_ml < row.par_level_ml)
 
-  const packed = session?.entries.filter((entry) => entry.vacuum_packed_at).length ?? 0
-  const totalOnChecklist = session?.entries.length ?? 0
+  const siteName = context.sites.find((site) => site.id === siteId)?.name ?? 'your restaurant'
+  const daysToRestock = daysUntilNextPrep(asOf, context.prepWeekdays)
 
-  const siteName = context.sites.find((site) => site.id === siteId)?.name ?? 'your kitchen'
+  const done = prepBoard?.completedCount ?? 0
+  const total = prepBoard?.lines.length ?? 0
+  const prepFinished = total > 0 && done === total
 
   return (
     <>
@@ -77,17 +87,22 @@ export default async function TodayPage() {
         title={`Good day, ${context.profile.full_name.split(' ')[0]}`}
         description={`${siteName} · ${
           isPrepToday
-            ? `${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} prep day, covering ${prepDay.coversDays} days`
-            : `Next prep is ${formatRelativeDay(nextRestock.date)}`
+            ? `prep day — this batch has to last ${prepDay.coversDays} days`
+            : `${context.canPrep ? 'Next prep' : 'Next delivery'} ${formatRelativeDay(nextRestock.date)}`
         }`}
         actions={
           <>
-            <LinkButton href="/usage" variant="secondary" size="lg" leadingIcon="clipboard-list">
+            <LinkButton
+              href="/usage"
+              variant={isPrepToday ? 'secondary' : 'primary'}
+              size="lg"
+              leadingIcon="clipboard-list"
+            >
               Log usage
             </LinkButton>
             {isPrepToday ? (
               <LinkButton href="/prep" size="lg" leadingIcon="chef-hat">
-                {session ? 'Continue prep' : 'Start prep'}
+                {done > 0 ? 'Continue prep' : 'Start prep'}
               </LinkButton>
             ) : null}
           </>
@@ -97,23 +112,23 @@ export default async function TodayPage() {
       {/* ------------------------------------------------------------------ */}
       {/* The one thing that matters                                         */}
       {/* ------------------------------------------------------------------ */}
-      {isPrepToday ? (
+      {isPrepToday && prepBoard ? (
         <Callout
-          tone={session ? (packed === totalOnChecklist && totalOnChecklist > 0 ? 'success' : 'info') : 'warning'}
+          tone={prepFinished ? 'success' : total === 0 ? 'warning' : 'info'}
           title={
-            !session
-              ? 'Prep has not been started yet'
-              : packed === totalOnChecklist && totalOnChecklist > 0
-                ? 'Prep is done for today'
-                : `Prep in progress — ${packed} of ${totalOnChecklist} sauces packed`
+            total === 0
+              ? 'No plan for today yet'
+              : prepFinished
+                ? 'Everything has been made'
+                : `${done} of ${total} sauces made`
           }
           className="mb-6"
         >
-          {!session
-            ? `Today's batch needs to cover ${prepDay.coversDays} days${plan ? ` — ${formatMl(plan.totalMl)} planned.` : '.'} Start the session to clock in and load the checklist.`
-            : packed === totalOnChecklist && totalOnChecklist > 0
-              ? 'Everything on the checklist has been cooked, chilled and packed. Remember to finish the session so your hours are recorded.'
-              : 'Work down the checklist: cook, blast chill for 1.5 hours, then vacuum pack.'}
+          {total === 0
+            ? 'Your manager builds the quantities in the planner. You can still record anything you make on the prep screen.'
+            : prepFinished
+              ? "Don't forget to send Hitchin's share across, and to finish your shift so your hours are recorded."
+              : `${formatMl(prepBoard.totalPlannedMl - prepBoard.totalMadeMl)} still to make. Record each one as you finish it.`}
         </Callout>
       ) : null}
 
@@ -142,10 +157,10 @@ export default async function TodayPage() {
           hint={`${loggedToday.size} sauce${loggedToday.size === 1 ? '' : 's'}`}
         />
         <StatCard
-          label="Days to next prep"
-          value={daysUntilNextPrep(asOf)}
-          unit={daysUntilNextPrep(asOf) === 1 ? 'day' : 'days'}
-          icon="chef-hat"
+          label={context.canPrep ? 'Days to next prep' : 'Days to next delivery'}
+          value={daysToRestock}
+          unit={daysToRestock === 1 ? 'day' : 'days'}
+          icon={context.canPrep ? 'chef-hat' : 'truck'}
           tone="neutral"
           hint={formatShort(nextRestock.date)}
         />
@@ -197,7 +212,7 @@ export default async function TodayPage() {
                     <p className="mt-1 text-xs text-ink-muted">
                       {bag.status === 'opened'
                         ? 'Opened — 2 day life'
-                        : `Sealed on ${formatShort(bag.prepDate)}`}
+                        : `Made on ${formatShort(bag.prepDate)}`}
                     </p>
                   </div>
                   <ExpiryBadge level={bag.level} label={bag.label} />
@@ -213,9 +228,7 @@ export default async function TodayPage() {
         <Card>
           <CardHeader
             eyebrow="Stock"
-            title={
-              belowPar.length === 0 ? 'Everything at par' : `${belowPar.length} below par level`
-            }
+            title={belowPar.length === 0 ? 'Everything topped up' : `${belowPar.length} running low`}
             description={
               belowPar.length === 0
                 ? 'Stock levels look healthy across the board.'
@@ -229,7 +242,7 @@ export default async function TodayPage() {
               tone="success"
               size="sm"
               title="No gaps"
-              description="Every sauce is at or above its target."
+              description="Every sauce is at or above its minimum."
             />
           ) : (
             <ul className="space-y-3.5">
@@ -259,52 +272,7 @@ export default async function TodayPage() {
         </Card>
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Next prep preview                                                  */}
-      {/* ------------------------------------------------------------------ */}
-      {!isPrepToday && plan ? (
-        <Card className="mt-6">
-          <CardHeader
-            eyebrow={`${prepDay.type === 'tuesday' ? 'Tuesday' : 'Friday'} · ${prepDay.coversDays}-day cover`}
-            title={`Coming up: prep on ${formatShort(prepDay.date)}`}
-            description={`${formatMl(plan.totalMl)} planned across ${plan.items.filter((item) => item.finalMl > 0).length} sauces. Prep runs 7–11am.`}
-            actions={
-              <LinkButton href="/prep" variant="secondary" size="sm" trailingIcon="arrow-right">
-                See the checklist
-              </LinkButton>
-            }
-          />
-          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {plan.items
-              .filter((item) => item.finalMl > 0)
-              .slice(0, 9)
-              .map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-lg bg-surface-sunken px-3.5 py-2.5"
-                >
-                  <span className="truncate text-sm font-medium text-ink">{item.sauceName}</span>
-                  <Badge tone="neutral" size="sm">
-                    {formatMl(item.finalMl)}
-                  </Badge>
-                </li>
-              ))}
-          </ul>
-        </Card>
-      ) : null}
-
-      {!isPrepToday && !plan ? (
-        <Card className="mt-6">
-          <EmptyState
-            icon="calendar"
-            size="sm"
-            title={`No plan yet for ${formatShort(prepDay.date)}`}
-            description="Your manager builds the forecast in the planner. It will show up here once it's ready."
-          />
-        </Card>
-      ) : null}
-
-      <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-ink-subtle">
+      <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-ink-subtle">
         <Icon name="info" size={13} />
         Sealed bags last 5 days. Once opened, 2 days — never beyond the sealed date.
       </p>
