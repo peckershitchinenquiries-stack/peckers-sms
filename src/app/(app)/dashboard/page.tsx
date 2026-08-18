@@ -4,6 +4,7 @@ import { requireManager, resolveSiteScope } from '@/lib/auth'
 import { getLiveStock, getTrackedBags, summariseExpiry } from '@/lib/queries/stock'
 import { buildForecast, getPrepVsPlan } from '@/lib/queries/planning'
 import { getAlerts, getDailyUsageTotals } from '@/lib/queries/activity'
+import { getDailySales } from '@/lib/cashflow/sales'
 import {
   addDaysTo,
   daysUntilNextPrep,
@@ -31,6 +32,12 @@ import { DashboardAlerts } from './DashboardAlerts'
 
 export const metadata: Metadata = { title: 'Dashboard' }
 
+const gbp = new Intl.NumberFormat('en-GB', {
+  style: 'currency',
+  currency: 'GBP',
+  maximumFractionDigits: 0,
+})
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -40,22 +47,25 @@ export default async function DashboardPage({
   const siteId = resolveSiteScope(context, searchParams.site)
   const asOf = today()
 
+  const sitesInScope = siteId
+    ? context.sites.filter((site) => site.id === siteId)
+    : context.sites
+
   const prepDay = upcomingPrepDay(asOf, context.prepWeekdays)
   const nextRestock = nextPrepDayAfter(asOf, context.prepWeekdays)
   const lastPrep = lastPrepDayOnOrBefore(asOf, context.prepWeekdays)
 
-  const [stock, bags, alerts, usageTotals, comparison] = await Promise.all([
+  const [stock, bags, alerts, usageTotals, comparison, sales] = await Promise.all([
     getLiveStock(siteId),
     getTrackedBags({ siteId }),
     getAlerts({ siteId, limit: 5 }),
     getDailyUsageTotals(siteId, 14),
     getPrepVsPlan({ siteId, from: addDaysTo(asOf, -7), to: asOf }),
+    getDailySales(asOf),
   ])
 
   // Forecast the upcoming batch for every site in scope.
-  const forecastSites = siteId
-    ? context.sites.filter((site) => site.id === siteId)
-    : context.sites
+  const forecastSites = sitesInScope
 
   const forecasts = await Promise.all(
     forecastSites.map(async (site) => ({
@@ -108,6 +118,28 @@ export default async function DashboardPage({
           </>
         }
       />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Sales today (from the cash-flow app)                               */}
+      {/* ------------------------------------------------------------------ */}
+      <section
+        aria-label="Sales today"
+        className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      >
+        {sitesInScope.map((site) => {
+          const amount = sales.get(site.slug)
+          return (
+            <StatCard
+              key={site.id}
+              label={`${site.name} · sales today`}
+              value={amount === undefined ? '—' : gbp.format(amount)}
+              icon="trending-up"
+              tone={amount === undefined ? 'neutral' : 'brand'}
+              hint={amount === undefined ? 'Not logged yet' : formatShort(asOf)}
+            />
+          )
+        })}
+      </section>
 
       {/* ------------------------------------------------------------------ */}
       {/* Snapshot                                                           */}
