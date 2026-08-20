@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 import { AppShell } from '@/components/app/AppShell'
+import { RouteProgress } from '@/components/app/RouteProgress'
 import { requireSession } from '@/lib/auth'
 import { createServerSupabase } from '@/lib/supabase/server'
 
@@ -17,6 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // AppShell reads useSearchParams for the site switcher, so it needs a
     // Suspense boundary to stay statically analysable.
     <Suspense fallback={null}>
+      <RouteProgress />
       <AppShell
         profile={profile}
         sites={sites}

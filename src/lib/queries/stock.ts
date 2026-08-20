@@ -14,7 +14,12 @@ import type { BagStatus, LiveStockRow } from '@/lib/types/database'
 /** Live stock per sauce per site. `siteId = null` returns every store. */
 export async function getLiveStock(siteId: string | null): Promise<LiveStockRow[]> {
   const supabase = createServerSupabase()
-  let query = supabase.from('live_stock').select('*').order('sauce_name')
+  let query = supabase
+    .from('live_stock')
+    .select(
+      'sauce_id, site_id, sauce_name, site_name, par_level_ml, sealed_bags, opened_bags, usable_bags, sealed_ml, opened_ml, usable_ml, expiring_today, expiring_soon',
+    )
+    .order('sauce_name')
 
   if (siteId) query = query.eq('site_id', siteId)
 
@@ -98,6 +103,13 @@ export async function getTrackedBags(options: BagQueryOptions): Promise<TrackedB
   if (siteId) query = query.eq('site_id', siteId)
   if (sauceId) query = query.eq('sauce_id', sauceId)
   if (prepDate) query = query.eq('prep_date', prepDate)
+  // Push the expiry cutoff into SQL so "use it today" style queries don't
+  // have to pull every live bag just to throw most of them away in JS.
+  if (expiringBy) {
+    query = query.or(
+      `and(opened_expiry.not.is.null,opened_expiry.lte.${expiringBy}),and(opened_expiry.is.null,sealed_expiry.lte.${expiringBy})`,
+    )
+  }
 
   const { data, error } = await query.returns<BagJoinRow[]>()
   if (error) throw new Error(`Loading bags: ${error.message}`)
@@ -159,7 +171,7 @@ export function summariseExpiry(bags: TrackedBag[]): ExpirySummary {
 
 /** Bags that need attention today — the "use it up" list for kitchen staff. */
 export async function getUseTodayBags(siteId: string | null): Promise<TrackedBag[]> {
-  const bags = await getTrackedBags({ siteId })
+  const bags = await getTrackedBags({ siteId, expiringBy: addDaysTo(today(), 2) })
   return bags.filter((bag) => bag.daysRemaining <= 2)
 }
 

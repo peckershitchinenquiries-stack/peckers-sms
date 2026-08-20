@@ -157,7 +157,9 @@ export async function getRecentTransfers(
 
   let query = supabase
     .from('stock_transfers')
-    .select('*, sauces(name), from_site:sites!stock_transfers_from_site_id_fkey(name), to_site:sites!stock_transfers_to_site_id_fkey(name)')
+    .select(
+      'id, sauce_id, from_site_id, to_site_id, transfer_date, ml, bags, created_by, created_at, sauces(name), from_site:sites!stock_transfers_from_site_id_fkey(name), to_site:sites!stock_transfers_to_site_id_fkey(name)',
+    )
     .order('created_at', { ascending: false })
     .limit(options.limit ?? 40)
 
