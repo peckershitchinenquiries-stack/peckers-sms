@@ -11,7 +11,7 @@ import {
 } from '@/lib/date'
 import type { BagStatus, LiveStockRow } from '@/lib/types/database'
 
-/** Live stock per sauce per site. `siteId = null` returns both sites. */
+/** Live stock per sauce per site. `siteId = null` returns every store. */
 export async function getLiveStock(siteId: string | null): Promise<LiveStockRow[]> {
   const supabase = createServerSupabase()
   let query = supabase.from('live_stock').select('*').order('sauce_name')

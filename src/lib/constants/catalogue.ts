@@ -1,7 +1,7 @@
 export interface SauceSeed {
   name: string
   slug: string
-  /** Rough par level (ml) used to seed both sites; managers tune it per site. */
+  /** Rough par level (ml) used to seed every store; managers tune it per site. */
   defaultParMl: number
 }
 

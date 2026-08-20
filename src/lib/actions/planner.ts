@@ -51,7 +51,7 @@ export async function generatePlan(input: {
 
     // Every restaurant this batch feeds, not just the kitchen that cooks it.
     const { forecasts } = await buildCombinedForecast({
-      sites: context.sites.map((site) => ({ id: site.id, name: site.name })),
+      sites: context.allSites.map((site) => ({ id: site.id, name: site.name })),
       prepDate: prepDay.date,
       windowDays: context.settings.forecast_window_days,
       bufferMultiplier: Number(context.settings.forecast_buffer),
@@ -105,7 +105,7 @@ export async function generatePlan(input: {
 
     revalidatePath('/planner')
     revalidatePath('/prep')
-    revalidatePath('/dispatch')
+    revalidatePath('/dispatch', 'layout')
     revalidatePath('/dashboard')
     revalidatePath('/today')
     return ok({ planId: plan.id, items: forecasts.length })

@@ -20,12 +20,20 @@ interface NavItem {
   /** Which roles see this entry. */
   roles: Array<'manager' | 'staff'>
   /**
-   * Only shown to people involved in preparing sauce. Hitchin cooks nothing,
-   * so its staff get a four-item menu rather than screens they can't act on.
+   * Only shown to people involved in preparing sauce. A receiving store cooks
+   * nothing, so its staff get a shorter menu rather than screens they can't
+   * act on.
    */
   prepOnly?: boolean
   description: string
 }
+
+/**
+ * Placeholder for the delivery runs, which aren't a fixed menu entry: there is
+ * one per receiving store, so with three stores the sidebar carries two of
+ * them. It sits in NAV purely to pin where they appear in the order.
+ */
+const DISPATCH_SLOT = '__dispatch__'
 
 const NAV: NavItem[] = [
   {
@@ -33,7 +41,7 @@ const NAV: NavItem[] = [
     label: 'Dashboard',
     icon: 'layout-dashboard',
     roles: ['manager'],
-    description: 'Everything, both restaurants',
+    description: 'Everything, every restaurant',
   },
   {
     href: '/today',
@@ -59,8 +67,8 @@ const NAV: NavItem[] = [
     description: 'Record what you made',
   },
   {
-    href: '/dispatch',
-    label: 'Send to Hitchin',
+    href: DISPATCH_SLOT,
+    label: 'Send to …',
     icon: 'truck',
     roles: ['manager', 'staff'],
     prepOnly: true,
@@ -118,6 +126,8 @@ export interface AppShellProps {
   isManager: boolean
   /** Whether this person has anything to do with preparing sauce. */
   canPrep: boolean
+  /** Every store the prep kitchen delivers to — one menu entry each. */
+  dispatchDestinations: Array<{ id: string; name: string }>
   prepWeekdays: number[]
   unresolvedAlerts: number
   children: React.ReactNode
@@ -128,6 +138,7 @@ export function AppShell({
   sites,
   isManager,
   canPrep,
+  dispatchDestinations,
   prepWeekdays,
   unresolvedAlerts,
   children,
@@ -139,8 +150,18 @@ export function AppShell({
     () =>
       NAV.filter(
         (item) => item.roles.includes(profile.role) && (!item.prepOnly || canPrep),
-      ),
-    [profile.role, canPrep],
+      ).flatMap<NavItem>((item) => {
+        if (item.href !== DISPATCH_SLOT) return item
+        // The slot expands into one entry per store. No stores to deliver to
+        // means no entries at all, rather than a link to an empty screen.
+        return dispatchDestinations.map((destination) => ({
+          ...item,
+          href: `/dispatch/${destination.id}`,
+          label: `Send to ${destination.name}`,
+          description: `Today's run to ${destination.name}`,
+        }))
+      }),
+    [profile.role, canPrep, dispatchDestinations],
   )
 
   // Any route change closes the mobile drawer.
@@ -297,6 +318,11 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
+/** "Both sites" reads wrong the moment a third store is added. */
+function allSitesLabel(count: number): string {
+  return count === 2 ? 'Both stores' : 'All stores'
+}
+
 function NavLink({
   item,
   active,
@@ -364,7 +390,7 @@ function SiteSwitcher({ sites, compact = false }: { sites: Site[]; compact?: boo
   const rootRef = React.useRef<HTMLDivElement>(null)
   useOnClickOutside([rootRef], () => setOpen(false), open)
 
-  const options = [{ id: 'all', name: 'Both sites' }, ...sites]
+  const options = [{ id: 'all', name: allSitesLabel(sites.length) }, ...sites]
   const selected = options.find((option) => option.id === current) ?? options[0]
 
   const select = (siteId: string) => {
@@ -446,7 +472,7 @@ function UserPanel({
 }) {
   const [pending, startTransition] = React.useTransition()
   const siteName = isManager
-    ? 'Both sites'
+    ? allSitesLabel(sites.length)
     : (sites.find((site) => site.id === profile.site_id)?.name ?? 'No site')
 
   const initials = profile.full_name

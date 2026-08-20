@@ -8,8 +8,17 @@ import type { AppSettings, Profile, Site } from '@/lib/types/database'
 
 export interface SessionContext {
   profile: Profile
-  /** Both sites for a manager; just their own for staff. */
+  /**
+   * The scope this person may read and write: every store for a manager, just
+   * their own for staff. Use this for anything that touches data.
+   */
   sites: Site[]
+  /**
+   * Every store on the system, regardless of scope. Store names are readable
+   * by anyone, so this is what the UI labels things with — a prep cook has to
+   * see "Send to Hitchin" even though Hitchin's data isn't theirs to read.
+   */
+  allSites: Site[]
   settings: AppSettings
   isManager: boolean
   /** Weekdays sauce is prepared on (0 = Sunday). Configurable in Settings. */
@@ -20,10 +29,15 @@ export interface SessionContext {
    */
   prepSite: Site | null
   /**
-   * Whether this user has anything to do with preparing sauce. False for
-   * Hitchin staff, who only log usage.
+   * Whether this user has anything to do with preparing sauce. False for staff
+   * at a receiving store, who only log usage.
    */
   canPrep: boolean
+  /**
+   * Every store the prep kitchen delivers to, in menu order. There is one
+   * "Send to …" screen per entry, and none at all for people who don't prep.
+   */
+  dispatchDestinations: Site[]
 }
 
 /**
@@ -72,16 +86,23 @@ export const getSessionContext = cache(async (): Promise<SessionContext | null> 
   // silently unreachable.
   const prepSite = allSites.find((site) => site.is_prep_site) ?? allSites[0] ?? null
 
+  // A manager oversees prep wherever it happens; staff only if they work in
+  // the kitchen that cooks.
+  const canPrep = isManager || (prepSite !== null && profile.site_id === prepSite.id)
+
   return {
     profile,
     sites: isManager ? allSites : allSites.filter((site) => site.id === profile.site_id),
+    allSites,
     settings: resolvedSettings,
     isManager,
     prepWeekdays: normalisePrepWeekdays(resolvedSettings.prep_weekdays),
     prepSite,
-    // A manager oversees prep wherever it happens; staff only if they work in
-    // the kitchen that cooks.
-    canPrep: isManager || (prepSite !== null && profile.site_id === prepSite.id),
+    canPrep,
+    // Deliveries leave the prep kitchen for everywhere else, however many
+    // stores that is.
+    dispatchDestinations:
+      canPrep && prepSite ? allSites.filter((site) => site.id !== prepSite.id) : [],
   }
 })
 
@@ -102,8 +123,8 @@ export async function requireManager(): Promise<SessionContext> {
 /**
  * Requires someone involved in preparing sauce.
  *
- * Hitchin doesn't cook, so its staff are sent home rather than shown an empty
- * checklist they can never act on.
+ * A receiving store doesn't cook, so its staff are sent home rather than shown
+ * an empty checklist they can never act on.
  */
 export async function requirePrepAccess(): Promise<
   SessionContext & { prepSite: Site }
@@ -117,8 +138,8 @@ export async function requirePrepAccess(): Promise<
  * Resolves which site a request should act on.
  *
  * Staff are pinned to their own site regardless of what the URL asks for.
- * Managers may pass `?site=<id>`; with no parameter they see both sites, which
- * the caller represents as `null`.
+ * Managers may pass `?site=<id>`; with no parameter they see every store,
+ * which the caller represents as `null`.
  */
 export function resolveSiteScope(
   context: SessionContext,

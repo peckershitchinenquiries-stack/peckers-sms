@@ -29,7 +29,7 @@ export default async function ExpiryPage({
         title="Expiry tracker"
         description={
           context.isManager
-            ? 'Every live bag across both sites, soonest to expire first. Shelf life is set per sauce in Settings.'
+            ? 'Every live bag across every store, soonest to expire first. Shelf life is set per sauce in Settings.'
             : 'Everything currently in your fridge, soonest to expire first. Work from the top down.'
         }
       />

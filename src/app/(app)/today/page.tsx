@@ -28,6 +28,12 @@ import { formatMl } from '@/lib/utils/volume'
 
 export const metadata: Metadata = { title: 'Today' }
 
+/** "Hitchin", "Hitchin and Letchworth", "Hitchin, Letchworth and Baldock". */
+function listSiteNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
 /**
  * The kitchen's home screen. One question it must answer instantly:
  * "what do I do right now?"
@@ -127,7 +133,9 @@ export default async function TodayPage() {
           {total === 0
             ? 'Your manager builds the quantities in the planner. You can still record anything you make on the prep screen.'
             : prepFinished
-              ? "Don't forget to send Hitchin's share across, and to finish your shift so your hours are recorded."
+              ? context.dispatchDestinations.length > 0
+                ? `Don't forget to send ${listSiteNames(context.dispatchDestinations.map((site) => site.name))} their share, and to finish your shift so your hours are recorded.`
+                : 'Finish your shift so your hours are recorded.'
               : `${formatMl(prepBoard.totalPlannedMl - prepBoard.totalMadeMl)} still to make. Record each one as you finish it.`}
         </Callout>
       ) : null}

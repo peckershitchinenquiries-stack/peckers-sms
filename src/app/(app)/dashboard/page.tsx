@@ -61,7 +61,10 @@ export default async function DashboardPage({
     getAlerts({ siteId, limit: 5 }),
     getDailyUsageTotals(siteId, 14),
     getPrepVsPlan({ siteId, from: addDaysTo(asOf, -7), to: asOf }),
-    getDailySales(asOf),
+    getDailySales(
+      asOf,
+      context.allSites.map((site) => site.slug),
+    ),
   ])
 
   // Forecast the upcoming batch for every site in scope.
@@ -293,7 +296,7 @@ export default async function DashboardPage({
               tone="success"
               size="sm"
               title="Nothing expiring soon"
-              description="Every bag at both sites has 3 or more days of life left."
+              description="Every bag across every store has 3 or more days of life left."
             />
           ) : (
             <ul className="divide-y divide-border">

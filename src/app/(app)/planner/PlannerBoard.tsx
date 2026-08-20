@@ -343,7 +343,7 @@ export function PlannerBoard({
 
       <p className="flex items-center justify-center gap-1.5 text-xs text-ink-subtle">
         <Icon name="info" size={13} />
-        Amounts are worked out from the last few weeks of usage at both restaurants, plus a safety
+        Amounts are worked out from the last few weeks of usage at every restaurant, plus a safety
         margin. Change anything you disagree with — a rebuild keeps your changes.
       </p>
 

@@ -15,6 +15,155 @@ function slugify(value: string): string {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Stores                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Adds a restaurant.
+ *
+ * New stores always receive rather than prepare — the prep kitchen is chosen
+ * separately and there is only ever one. A database trigger gives the store a
+ * par level for every sauce, so the planner starts forecasting for it on the
+ * next run without anyone visiting the Minimum stock tab first.
+ */
+export async function createSite(input: {
+  name: string
+  address?: string | null
+}): Promise<ActionResult<{ id: string }>> {
+  try {
+    await requireManager()
+
+    const name = input.name.trim()
+    if (name.length < 2) return fail(new Error('Give the store a name.'))
+
+    const slug = slugify(name)
+    if (!slug) return fail(new Error('Give the store a name using letters or numbers.'))
+
+    const address = input.address?.trim() || null
+
+    const supabase = createServerSupabase()
+    const { data, error } = await supabase
+      .from('sites')
+      .insert({ name, slug, address, is_prep_site: false })
+      .select('id')
+      .single<{ id: string }>()
+    if (error) {
+      throw new Error(
+        /duplicate|unique/i.test(error.message)
+          ? 'A store with that name already exists.'
+          : error.message,
+      )
+    }
+
+    // A new store changes the sidebar, the site switcher and the plan split,
+    // so the whole app is revalidated rather than just this page.
+    revalidatePath('/', 'layout')
+    return ok({ id: data.id })
+  } catch (error) {
+    return fail(error, 'Could not add the store.')
+  }
+}
+
+export async function updateSite(input: {
+  siteId: string
+  name?: string
+  address?: string | null
+}): Promise<ActionResult> {
+  try {
+    await requireManager()
+
+    const patch: Record<string, unknown> = {}
+
+    if (input.name !== undefined) {
+      const name = input.name.trim()
+      if (name.length < 2) return fail(new Error('Give the store a name.'))
+      patch.name = name
+      // The slug follows the name so it stays recognisable in exports and in
+      // the cash app matching, which looks the store up by slug.
+      const slug = slugify(name)
+      if (!slug) return fail(new Error('Give the store a name using letters or numbers.'))
+      patch.slug = slug
+    }
+    if (input.address !== undefined) patch.address = input.address?.trim() || null
+
+    if (Object.keys(patch).length === 0) return ok()
+
+    const supabase = createServerSupabase()
+    const { error } = await supabase.from('sites').update(patch).eq('id', input.siteId)
+    if (error) {
+      throw new Error(
+        /duplicate|unique/i.test(error.message)
+          ? 'A store with that name already exists.'
+          : error.message,
+      )
+    }
+
+    revalidatePath('/', 'layout')
+    return ok()
+  } catch (error) {
+    return fail(error, 'Could not save the store.')
+  }
+}
+
+/**
+ * Removes a store for good, along with its stock, usage history and plans.
+ *
+ * Deliberately strict about when that is allowed. The prep kitchen is what
+ * every prep screen hangs off, and a store with staff still attached would
+ * leave those accounts pointing nowhere — the `staff_requires_site` constraint
+ * would reject the delete anyway, but with a message nobody can act on. Both
+ * are checked here so the manager is told what to fix.
+ */
+export async function deleteSite(siteId: string): Promise<ActionResult> {
+  try {
+    await requireManager()
+    const supabase = createServerSupabase()
+
+    const { data: site } = await supabase
+      .from('sites')
+      .select('id, name, is_prep_site')
+      .eq('id', siteId)
+      .maybeSingle<{ id: string; name: string; is_prep_site: boolean }>()
+    if (!site) return fail(new Error('That store no longer exists.'))
+
+    if (site.is_prep_site) {
+      return fail(
+        new Error(
+          'This store prepares the sauce. Move prep to another store first, then remove it.',
+        ),
+      )
+    }
+
+    const { count: siteCount } = await supabase
+      .from('sites')
+      .select('id', { count: 'exact', head: true })
+    if ((siteCount ?? 0) <= 1) {
+      return fail(new Error('There has to be at least one store.'))
+    }
+
+    const { count: staffCount } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('site_id', siteId)
+    if ((staffCount ?? 0) > 0) {
+      return fail(
+        new Error(
+          `${staffCount} account${staffCount === 1 ? ' is' : 's are'} still assigned to ${site.name}. Move them to another store first.`,
+        ),
+      )
+    }
+
+    const { error } = await supabase.from('sites').delete().eq('id', siteId)
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/', 'layout')
+    return ok()
+  } catch (error) {
+    return fail(error, 'Could not remove the store.')
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Sauces                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -81,7 +230,7 @@ export async function upsertSauce(input: {
       )
     }
 
-    // Every sauce exists at both sites — create the par rows straight away.
+    // Every sauce exists at every store — create the par rows straight away.
     const { data: sites } = await supabase.from('sites').select('id').returns<Array<{ id: string }>>()
     if (sites?.length) {
       await supabase.from('par_levels').upsert(

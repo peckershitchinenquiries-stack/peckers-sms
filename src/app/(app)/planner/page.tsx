@@ -34,7 +34,7 @@ export default async function PlannerPage({
   const [plan, forecast] = await Promise.all([
     getPlan(context.prepSite.id, prepDay.date, context.settings.bag_sizes_ml),
     buildCombinedForecast({
-      sites: context.sites.map((site) => ({ id: site.id, name: site.name })),
+      sites: context.allSites.map((site) => ({ id: site.id, name: site.name })),
       prepDate: prepDay.date,
       windowDays: context.settings.forecast_window_days,
       bufferMultiplier: Number(context.settings.forecast_buffer),
@@ -50,14 +50,14 @@ export default async function PlannerPage({
       <PageHeader
         eyebrow={describePrepDays(context.prepWeekdays)}
         title={`Plan for ${formatShort(prepDay.date)}`}
-        description={`Everything is cooked at ${context.prepSite.name} and must last until ${formatShort(lastCovered)} — ${prepDay.coversDays} days across ${context.sites.length} restaurant${context.sites.length === 1 ? '' : 's'}.`}
+        description={`Everything is cooked at ${context.prepSite.name} and must last until ${formatShort(lastCovered)} — ${prepDay.coversDays} days across ${context.allSites.length} restaurant${context.allSites.length === 1 ? '' : 's'}.`}
       />
 
       <PlannerBoard
         prepDate={prepDay.date}
         coversDays={prepDay.coversDays}
         prepSiteName={context.prepSite.name}
-        sites={context.sites.map((site) => ({ id: site.id, name: site.name }))}
+        sites={context.allSites.map((site) => ({ id: site.id, name: site.name }))}
         forecasts={forecast.forecasts}
         plan={plan}
       />

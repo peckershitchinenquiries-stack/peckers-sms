@@ -143,14 +143,27 @@ export interface TransferEntry extends StockTransfer {
   toSiteName: string
 }
 
-export async function getRecentTransfers(limit = 40): Promise<TransferEntry[]> {
+/**
+ * Recent deliveries, newest first.
+ *
+ * `toSiteId` narrows it to one receiving store. With several stores on the
+ * system an unfiltered list would interleave three or four delivery runs,
+ * which reads as noise on a screen about one of them.
+ */
+export async function getRecentTransfers(
+  options: { toSiteId?: string; limit?: number } = {},
+): Promise<TransferEntry[]> {
   const supabase = createServerSupabase()
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('stock_transfers')
     .select('*, sauces(name), from_site:sites!stock_transfers_from_site_id_fkey(name), to_site:sites!stock_transfers_to_site_id_fkey(name)')
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .limit(options.limit ?? 40)
+
+  if (options.toSiteId) query = query.eq('to_site_id', options.toSiteId)
+
+  const { data, error } = await query
     .returns<
       Array<
         StockTransfer & {

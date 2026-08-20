@@ -8,7 +8,8 @@ import type { TransferStockResult } from '@/lib/types/database'
 import { fail, ok, type ActionResult } from './types'
 
 function revalidateDispatch(): void {
-  revalidatePath('/dispatch')
+  // 'layout' so every /dispatch/<store> screen refreshes, not just one.
+  revalidatePath('/dispatch', 'layout')
   revalidatePath('/expiry')
   revalidatePath('/usage')
   revalidatePath('/dashboard')
@@ -35,8 +36,10 @@ export async function sendStock(input: {
     if (input.toSiteId === fromSiteId) {
       return fail(new Error('That sauce is already at the prep kitchen.'))
     }
-    if (!context.sites.some((site) => site.id === input.toSiteId)) {
-      return fail(new Error('You do not have access to that restaurant.'))
+    // Checked against every store, not the caller's own scope: a prep cook is
+    // scoped to the kitchen alone, yet sending stock out of it is their job.
+    if (!context.allSites.some((site) => site.id === input.toSiteId)) {
+      return fail(new Error('That restaurant is not on the system.'))
     }
     if (!Number.isFinite(input.ml) || input.ml <= 0) {
       return fail(new Error('Enter how much to send.'))
@@ -78,8 +81,8 @@ export async function sendAllStock(input: {
     if (input.toSiteId === fromSiteId) {
       return fail(new Error('Pick a different restaurant.'))
     }
-    if (!context.sites.some((site) => site.id === input.toSiteId)) {
-      return fail(new Error('You do not have access to that restaurant.'))
+    if (!context.allSites.some((site) => site.id === input.toSiteId)) {
+      return fail(new Error('That restaurant is not on the system.'))
     }
 
     const pending = input.lines.filter((line) => line.ml > 0)

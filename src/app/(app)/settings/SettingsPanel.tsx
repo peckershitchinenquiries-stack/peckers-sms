@@ -22,12 +22,15 @@ import {
   useToast,
 } from '@/components/ui'
 import {
+  createSite,
   createStaffAccount,
+  deleteSite,
   resetStaffPassword,
   setParLevel,
   setPrepSite,
   setSauceActive,
   updateAppSettings,
+  updateSite,
   updateStaffAccount,
   upsertSauce,
 } from '@/lib/actions/settings'
@@ -35,7 +38,7 @@ import { APP_TIMEZONE, describePrepDays, formatDateOnly, normalisePrepWeekdays }
 import { formatMl } from '@/lib/utils/volume'
 import type { AppSettings, ParLevel, Profile, Sauce, Site } from '@/lib/types/database'
 
-type Tab = 'prep' | 'sauces' | 'pars' | 'staff' | 'app'
+type Tab = 'prep' | 'stores' | 'sauces' | 'pars' | 'staff' | 'app'
 
 export interface SettingsPanelProps {
   sauces: Sauce[]
@@ -64,6 +67,7 @@ export function SettingsPanel({
         onChange={(value) => setTab(value as Tab)}
         items={[
           { value: 'prep', label: 'Prep days', icon: 'calendar' },
+          { value: 'stores', label: 'Stores', icon: 'map-pin', count: sites.length },
           { value: 'sauces', label: 'Sauces', icon: 'droplet', count: sauces.filter((s) => s.active).length },
           { value: 'pars', label: 'Minimum stock', icon: 'scale' },
           { value: 'staff', label: 'Staff', icon: 'users', count: staff.filter((s) => s.active).length },
@@ -71,7 +75,8 @@ export function SettingsPanel({
         ]}
       />
 
-      {tab === 'prep' ? <PrepTab settings={settings} sites={sites} /> : null}
+      {tab === 'prep' ? <PrepTab settings={settings} /> : null}
+      {tab === 'stores' ? <StoresTab sites={sites} /> : null}
       {tab === 'sauces' ? <SaucesTab sauces={sauces} /> : null}
       {tab === 'pars' ? <ParsTab sauces={sauces} parLevels={parLevels} sites={sites} /> : null}
       {tab === 'staff' ? (
@@ -83,7 +88,7 @@ export function SettingsPanel({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Prep days and the prep kitchen                                             */
+/* Prep days                                                                  */
 /* -------------------------------------------------------------------------- */
 
 /** Monday-first, because that is how a rota is read. */
@@ -97,7 +102,7 @@ const WEEKDAY_PICKER = [
   { value: 0, label: 'Sun' },
 ]
 
-function PrepTab({ settings, sites }: { settings: AppSettings; sites: Site[] }) {
+function PrepTab({ settings }: { settings: AppSettings }) {
   const router = useRouter()
   const { toast } = useToast()
   const [busy, startTransition] = React.useTransition()
@@ -134,10 +139,8 @@ function PrepTab({ settings, sites }: { settings: AppSettings; sites: Site[] }) 
     })
   }
 
-  const prepSite = sites.find((site) => site.is_prep_site) ?? null
-
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="max-w-2xl">
       <Card>
         <CardHeader
           eyebrow="Schedule"
@@ -189,27 +192,292 @@ function PrepTab({ settings, sites }: { settings: AppSettings; sites: Site[] }) 
           </Button>
         </div>
       </Card>
-
-      <Card>
-        <CardHeader
-          eyebrow="Location"
-          title="Where is sauce prepared?"
-          description="Only this restaurant sees the planner, the prep checklist and the delivery run. Everywhere else just logs what it uses."
-        />
-
-        <div className="space-y-2.5">
-          {sites.map((site) => (
-            <PrepSiteOption key={site.id} site={site} selected={site.id === prepSite?.id} />
-          ))}
-        </div>
-
-        <p className="mt-4 text-xs leading-relaxed text-ink-subtle">
-          Sauce made here is delivered out to the others. Staff at a receiving restaurant only ever
-          see their daily usage, stock and expiry dates.
-        </p>
-      </Card>
     </div>
   )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Stores                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Add, rename and remove restaurants, and pick which one cooks.
+ *
+ * Exactly one store prepares sauce, however many there are. Everywhere else
+ * receives it, and each receiving store gets its own "Send to …" screen in the
+ * sidebar the moment it is added.
+ */
+function StoresTab({ sites }: { sites: Site[] }) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [busy, startTransition] = React.useTransition()
+
+  const [editing, setEditing] = React.useState<Site | null>(null)
+  const [creating, setCreating] = React.useState(false)
+  const [removing, setRemoving] = React.useState<Site | null>(null)
+  const [form, setForm] = React.useState<{ name: string; address: string }>({
+    name: '',
+    address: '',
+  })
+
+  const prepSite = sites.find((site) => site.is_prep_site) ?? null
+  const destinations = sites.filter((site) => site.id !== prepSite?.id)
+
+  const openCreate = () => {
+    setForm({ name: '', address: '' })
+    setCreating(true)
+  }
+
+  const openEdit = (site: Site) => {
+    setForm({ name: site.name, address: site.address ?? '' })
+    setEditing(site)
+  }
+
+  const create = () => {
+    startTransition(async () => {
+      const result = await createSite({ name: form.name, address: form.address })
+      if (!result.ok) {
+        toast({ tone: 'danger', title: 'Could not add the store', description: result.error })
+        return
+      }
+      toast({
+        tone: 'success',
+        title: `${form.name.trim()} added`,
+        description: `It receives deliveries, so "Send to ${form.name.trim()}" is now in the menu.`,
+      })
+      setCreating(false)
+      router.refresh()
+    })
+  }
+
+  const save = () => {
+    if (!editing) return
+    startTransition(async () => {
+      const result = await updateSite({
+        siteId: editing.id,
+        name: form.name,
+        address: form.address,
+      })
+      if (!result.ok) {
+        toast({ tone: 'danger', title: 'Could not save', description: result.error })
+        return
+      }
+      toast({ tone: 'success', title: 'Store updated' })
+      setEditing(null)
+      router.refresh()
+    })
+  }
+
+  return (
+    <>
+      <div className="space-y-6">
+        <Card padded={false}>
+          <div className="border-b border-border p-5">
+            <CardHeader
+              className="mb-0"
+              eyebrow={`${sites.length} store${sites.length === 1 ? '' : 's'}`}
+              title="Restaurants"
+              description="Add a store and it starts receiving deliveries straight away, with its own place in the sidebar and its own share of every prep plan."
+              actions={
+                <Button leadingIcon="plus" size="md" onClick={openCreate}>
+                  Add store
+                </Button>
+              }
+            />
+          </div>
+
+          <Table
+            rows={sites}
+            rowKey={(site) => site.id}
+            className="rounded-none border-0"
+            stickyHeader={false}
+            empty={{
+              icon: 'map-pin',
+              title: 'No stores yet',
+              description: 'Add the first restaurant.',
+            }}
+            columns={[
+              {
+                key: 'name',
+                header: 'Store',
+                cell: (site) => (
+                  <div>
+                    <span className="font-medium text-ink">{site.name}</span>
+                    {site.address ? (
+                      <span className="block text-2xs text-ink-subtle">{site.address}</span>
+                    ) : null}
+                  </div>
+                ),
+              },
+              {
+                key: 'role',
+                header: 'Role',
+                cell: (site) =>
+                  site.is_prep_site ? (
+                    <Badge tone="brand" size="sm" icon="chef-hat">
+                      Prepares sauce
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral" size="sm" icon="truck">
+                      Receives deliveries
+                    </Badge>
+                  ),
+              },
+              {
+                key: 'actions',
+                header: '',
+                align: 'right',
+                cell: (site) => (
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      leadingIcon="edit"
+                      onClick={() => openEdit(site)}
+                    >
+                      Edit
+                    </Button>
+                    <Tooltip
+                      content={
+                        site.is_prep_site
+                          ? 'Move prep to another store before removing this one.'
+                          : `Remove ${site.name} and everything recorded there.`
+                      }
+                    >
+                      <span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          iconOnly
+                          leadingIcon="trash"
+                          aria-label={`Remove ${site.name}`}
+                          disabled={site.is_prep_site || sites.length <= 1}
+                          onClick={() => setRemoving(site)}
+                        />
+                      </span>
+                    </Tooltip>
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </Card>
+
+        <Card>
+          <CardHeader
+            eyebrow="Location"
+            title="Where is sauce prepared?"
+            description="Only this restaurant sees the planner, the prep checklist and the delivery runs. Everywhere else just logs what it uses."
+          />
+
+          <div className="space-y-2.5">
+            {sites.map((site) => (
+              <PrepSiteOption key={site.id} site={site} selected={site.id === prepSite?.id} />
+            ))}
+          </div>
+
+          <p className="mt-4 text-xs leading-relaxed text-ink-subtle">
+            {destinations.length === 0
+              ? 'With only one store there is nothing to deliver — add another to start a delivery run.'
+              : `Sauce made here is driven out to ${listNames(destinations.map((site) => site.name))}. Staff at a receiving restaurant only ever see their daily usage, stock and expiry dates.`}
+          </p>
+        </Card>
+      </div>
+
+      <Modal
+        open={creating}
+        onClose={() => setCreating(false)}
+        title="Add a store"
+        description="It will receive deliveries from the prep kitchen. You can switch which store cooks afterwards."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCreating(false)}>
+              Cancel
+            </Button>
+            <Button loading={busy} disabled={form.name.trim().length < 2} onClick={create}>
+              Add store
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <Input
+            label="Store name"
+            required
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+            placeholder="e.g. Letchworth"
+          />
+          <Input
+            label="Address"
+            hint="Optional — only used to tell the stores apart."
+            value={form.address}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, address: event.target.value }))
+            }
+            placeholder="e.g. 12 High Street"
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title={`Edit ${editing?.name ?? 'store'}`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+            <Button loading={busy} disabled={form.name.trim().length < 2} onClick={save}>
+              Save changes
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <Input
+            label="Store name"
+            required
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+          />
+          <Input
+            label="Address"
+            value={form.address}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, address: event.target.value }))
+            }
+          />
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        tone="destructive"
+        confirmLabel="Remove store"
+        title={`Remove ${removing?.name}?`}
+        description={`Everything recorded at ${removing?.name} — its stock, usage history, deliveries and minimum levels — is deleted with it. This cannot be undone. Move any staff to another store first.`}
+        onConfirm={async () => {
+          if (!removing) return
+          const result = await deleteSite(removing.id)
+          if (result.ok) {
+            toast({ tone: 'success', title: `${removing.name} removed` })
+            router.refresh()
+          } else {
+            toast({ tone: 'danger', title: 'Could not remove', description: result.error })
+          }
+        }}
+      />
+    </>
+  )
+}
+
+/** "Hitchin", "Hitchin and Letchworth", "Hitchin, Letchworth and Baldock". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
 function PrepSiteOption({ site, selected }: { site: Site; selected: boolean }) {
@@ -445,7 +713,7 @@ function SaucesTab({ sauces }: { sauces: Sauce[] }) {
         description={
           editing
             ? undefined
-            : 'The sauce is created at both sites with a par level of 0 — set it on the Par levels tab.'
+            : 'The sauce is created at every store with a par level of 0 — set it on the Par levels tab.'
         }
         size="sm"
         footer={
@@ -726,7 +994,7 @@ function StaffTab({
                 <span className="inline-flex items-center gap-1.5 text-ink-muted">
                   <Icon name="map-pin" size={13} />
                   {person.role === 'manager'
-                    ? 'Both sites'
+                    ? 'All stores'
                     : (sites.find((site) => site.id === person.site_id)?.name ?? 'Unassigned')}
                 </span>
               ),
@@ -849,7 +1117,7 @@ function StaffTab({
               {
                 value: 'manager',
                 label: 'Manager',
-                description: 'Full access across both sites, plus settings and exports.',
+                description: 'Full access across every store, plus settings and exports.',
               },
             ]}
           />
@@ -1036,7 +1304,7 @@ function AppTab({ settings }: { settings: AppSettings }) {
         <CardHeader
           eyebrow="Notifications"
           title="Daily digest and alerts"
-          description="The digest lists everything amber and red across both sites."
+          description="The digest lists everything amber and red across every store."
         />
         <div className="space-y-6">
           <Toggle

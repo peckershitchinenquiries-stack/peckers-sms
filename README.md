@@ -1,6 +1,6 @@
 # Peckers — Sauce Management System (SMS)
 
-An internal web app for **Peckers**, a UK food chain running two kitchens (**Stevenage** and **Hitchin**) that make **15 house sauces** in-house.
+An internal web app for **Peckers**, a UK food chain running any number of restaurants (**Stevenage** and **Hitchin** today) that make **15 house sauces** in-house.
 
 It digitises the whole sauce lifecycle: forecast how much to prepare → log what was actually made → track every vacuum-sealed bag from prep day until it's used or thrown away → warn staff and managers before things go wrong.
 
@@ -28,7 +28,8 @@ These drive every calculation in the app and are enforced in the database, not j
 
 | Rule | Detail |
 | --- | --- |
-| **Where sauce is made** | One kitchen only — Stevenage (`sites.is_prep_site`). It is delivered out to the other restaurants. Hitchin never sees a prep screen. |
+| **Stores** | Any number, managed in Settings → Stores. Adding one gives it a share of every prep plan and its own "Send to …" screen in the sidebar. |
+| **Where sauce is made** | Exactly one kitchen — Stevenage today (`sites.is_prep_site`, enforced by a partial unique index). It is delivered out to every other store, and those stores never see a prep screen. |
 | **Prep days** | Configurable in Settings (`app_settings.prep_weekdays`). Tuesday and Friday today; a manager can change them without a deploy. |
 | **Coverage** | Derived, not hardcoded: a batch must last until the **next** prep day. With Tue/Fri that gives the familiar 3-day and 4-day batches. |
 | **Prep process** | **One step per sauce.** Staff record the volume made and the bags it went into. Cold sauces never go near a blast chiller, so a cook → chill → pack ticklist was recording ceremony rather than facts. |
@@ -44,9 +45,9 @@ Buffalo, Butter Me Up, Garlic Aioli, House Mayo, Supercharged OG, Hot Honey, Che
 
 ### Roles
 
-- **Manager** — sees everything across both restaurants, sets prep days and minimum stock, adjusts forecasts, gets alerts, exports payroll CSVs.
-- **Prep-kitchen staff** (Stevenage) — plan → make → send. Sees the prep checklist, the delivery run, usage, expiry and alerts.
-- **Receiving staff** (Hitchin) — a four-item menu: Today, Daily usage, Expiry and Alerts. No planner, no checklist, no delivery run, because none of it is theirs to do.
+- **Manager** — sees everything across every restaurant, adds and removes stores, picks which one prepares sauce, sets prep days and minimum stock, adjusts forecasts, gets alerts, exports payroll CSVs.
+- **Prep-kitchen staff** (Stevenage) — plan → make → send. Sees the prep checklist, one delivery run per receiving store, usage, expiry and alerts.
+- **Receiving staff** (Hitchin, and any store added later) — a four-item menu: Today, Daily usage, Expiry and Alerts. No planner, no checklist, no delivery run, because none of it is theirs to do.
 
 Row Level Security enforces the site boundary at the database level: staff physically cannot read or write another restaurant's rows, whatever the client asks for. The prep/receive split is enforced in `requirePrepAccess()`, which redirects rather than showing an empty screen.
 
@@ -221,7 +222,7 @@ sites (is_prep_site) ──┬── profiles (fk auth.users, role, site_id)
         ├── prep_checklist (site_id, prep_date, sauce_id, planned_ml, actual_ml, completed_at)
         ├── prep_sessions (the overtime clock; checklist rows reference it, optionally)
         ├── bags (ONE ROW PER PHYSICAL BAG, size_ml)
-        ├── stock_transfers (the Stevenage → Hitchin delivery record)
+        ├── stock_transfers (the prep kitchen → store delivery record)
         ├── usage_logs (ml_used)
         └── alerts
 app_settings (singleton: timezone, digest hour, recipients, forecast buffer & window,
@@ -362,7 +363,7 @@ src/
       today/                  Staff home — "what do I do right now?"
       planner/                One plan per prep day, with the per-restaurant split
       prep/                   One-step checklist — volume made + bags
-      dispatch/               Delivery run to the receiving restaurants
+      dispatch/[siteId]/      Delivery run — one screen per receiving store
       batches/                Batch history + prep-vs-plan
       usage/                  Daily usage logging + burn rate
       expiry/                 Expiry tracker (staff and manager views)

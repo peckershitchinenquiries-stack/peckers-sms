@@ -15,22 +15,27 @@ interface DailySalesResponse {
   stores?: { storeName?: string | null; sales?: number | null }[]
 }
 
-/** Site slugs are matched against the cash app's store names ("Hitchin Peckers"). */
-const SITE_SLUGS = ['stevenage', 'hitchin']
-
 /**
  * Sales per site slug for `date` (YYYY-MM-DD). Sites with no entry logged yet
  * are absent from the map.
  *
+ * `siteSlugs` are this system's own store slugs, matched against the cash
+ * app's store names. They are passed in rather than hard-coded so a store
+ * added in Settings is picked up without a code change — as long as the two
+ * apps name it recognisably ("Letchworth" vs "Letchworth Peckers").
+ *
  * Never throws: the sauce dashboard has to render even when the cash app is
  * down or unconfigured, so every failure degrades to an empty map.
  */
-export async function getDailySales(date: string): Promise<Map<string, number>> {
+export async function getDailySales(
+  date: string,
+  siteSlugs: string[],
+): Promise<Map<string, number>> {
   const result = new Map<string, number>()
 
   const baseUrl = process.env.CASHFLOW_API_URL
   const secret = process.env.CASHFLOW_API_SECRET
-  if (!baseUrl || !secret) return result
+  if (!baseUrl || !secret || siteSlugs.length === 0) return result
 
   try {
     const response = await fetch(
@@ -53,7 +58,7 @@ export async function getDailySales(date: string): Promise<Map<string, number>> 
       const name = (store.storeName ?? '').toLowerCase()
       // The two apps name the stores differently ("Hitchin Peckers" vs
       // "Hitchin"), so match on the slug appearing in the cash app's name.
-      const slug = SITE_SLUGS.find((candidate) => name.includes(candidate))
+      const slug = siteSlugs.find((candidate) => name.includes(candidate))
       if (!slug || typeof store.sales !== 'number') continue
       result.set(slug, store.sales)
     }

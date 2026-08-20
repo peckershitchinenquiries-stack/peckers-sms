@@ -11,7 +11,7 @@ const MAX_ML = 100_000
 
 function revalidatePrep(): void {
   revalidatePath('/prep')
-  revalidatePath('/dispatch')
+  revalidatePath('/dispatch', 'layout')
   revalidatePath('/batches')
   revalidatePath('/expiry')
   revalidatePath('/overtime')

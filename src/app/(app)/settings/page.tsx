@@ -27,7 +27,7 @@ export default async function SettingsPage() {
         sauces={sauces}
         parLevels={parLevels}
         staff={staff}
-        sites={context.sites}
+        sites={context.allSites}
         settings={context.settings}
         currentProfileId={context.profile.id}
       />

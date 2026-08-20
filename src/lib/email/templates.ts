@@ -115,7 +115,7 @@ export function renderDigestEmail(payload: DigestPayload): { subject: string; ht
     totalToday === 0 && totalSoon === 0 && payload.sections.every((s) => s.lowStock.length === 0)
       ? `${intro}<div style="background:#EAF6EF;border:1px solid #D2ECDD;border-radius:10px;padding:16px;">
            <p style="margin:0;font-size:14px;color:${COLOURS.success};font-weight:600;">Nothing expiring and nothing running low.</p>
-           <p style="margin:6px 0 0;font-size:13px;color:${COLOURS.inkMuted};">Every bag at both sites has 3 or more days of life left.</p>
+           <p style="margin:6px 0 0;font-size:13px;color:${COLOURS.inkMuted};">Every bag across every store has 3 or more days of life left.</p>
          </div>`
       : intro + payload.sections.map(renderSection).join('')
 
