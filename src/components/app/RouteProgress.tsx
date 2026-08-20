@@ -82,8 +82,11 @@ export function RouteProgress() {
       start(target)
     }
 
-    document.addEventListener('click', onClick)
-    return () => document.removeEventListener('click', onClick)
+    // Capture phase: must run before next/link's own onClick (which calls
+    // preventDefault during the bubble phase via React's root-level
+    // delegation), or event.defaultPrevented below would already be true.
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
   }, [start])
 
   React.useEffect(() => () => clearTimers(), [clearTimers])
