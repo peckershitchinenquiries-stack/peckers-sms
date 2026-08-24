@@ -4,7 +4,7 @@ import { requireManager, resolveSiteScope } from '@/lib/auth'
 import { getLiveStock, getTrackedBags, summariseExpiry } from '@/lib/queries/stock'
 import { buildForecast, getPrepVsPlan } from '@/lib/queries/planning'
 import { getAlerts, getDailyUsageTotals } from '@/lib/queries/activity'
-import { getDailySales } from '@/lib/cashflow/sales'
+import { getGrossSales, latestSalesDate } from '@/lib/vitamojo/sales'
 import {
   addDaysTo,
   daysUntilNextPrep,
@@ -55,14 +55,18 @@ export default async function DashboardPage({
   const nextRestock = nextPrepDayAfter(asOf, context.prepWeekdays)
   const lastPrep = lastPrepDayOnOrBefore(asOf, context.prepWeekdays)
 
+  // Vitamojo is scraped overnight after close, so the newest complete day of
+  // gross sales is always yesterday's.
+  const salesDate = latestSalesDate(asOf)
+
   const [stock, bags, alerts, usageTotals, comparison, sales] = await Promise.all([
     getLiveStock(siteId),
     getTrackedBags({ siteId }),
     getAlerts({ siteId, limit: 5 }),
     getDailyUsageTotals(siteId, 14),
     getPrepVsPlan({ siteId, from: addDaysTo(asOf, -7), to: asOf }),
-    getDailySales(
-      asOf,
+    getGrossSales(
+      salesDate,
       context.allSites.map((site) => site.slug),
     ),
   ])
@@ -123,10 +127,10 @@ export default async function DashboardPage({
       />
 
       {/* ------------------------------------------------------------------ */}
-      {/* Sales today (from the cash-flow app)                               */}
+      {/* Gross sales (scraped from Vitamojo overnight)                      */}
       {/* ------------------------------------------------------------------ */}
       <section
-        aria-label="Sales today"
+        aria-label="Gross sales"
         className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
       >
         {sitesInScope.map((site) => {
@@ -134,11 +138,15 @@ export default async function DashboardPage({
           return (
             <StatCard
               key={site.id}
-              label={`${site.name} · sales today`}
+              label={`${site.name} · gross sales`}
               value={amount === undefined ? '—' : gbp.format(amount)}
               icon="trending-up"
               tone={amount === undefined ? 'neutral' : 'brand'}
-              hint={amount === undefined ? 'Not logged yet' : formatShort(asOf)}
+              hint={
+                amount === undefined
+                  ? `No figures for ${formatShort(salesDate)} yet`
+                  : formatRelativeDay(salesDate)
+              }
             />
           )
         })}

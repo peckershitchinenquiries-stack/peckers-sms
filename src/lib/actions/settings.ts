@@ -79,7 +79,7 @@ export async function updateSite(input: {
       if (name.length < 2) return fail(new Error('Give the store a name.'))
       patch.name = name
       // The slug follows the name so it stays recognisable in exports and in
-      // the cash app matching, which looks the store up by slug.
+      // the Vitamojo sales matching, which looks the store up by slug.
       const slug = slugify(name)
       if (!slug) return fail(new Error('Give the store a name using letters or numbers.'))
       patch.slug = slug
