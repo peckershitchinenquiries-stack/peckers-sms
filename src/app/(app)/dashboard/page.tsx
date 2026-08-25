@@ -35,7 +35,8 @@ export const metadata: Metadata = { title: 'Dashboard' }
 const gbp = new Intl.NumberFormat('en-GB', {
   style: 'currency',
   currency: 'GBP',
-  maximumFractionDigits: 0,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 })
 
 export default async function DashboardPage({
