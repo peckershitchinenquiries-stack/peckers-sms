@@ -8,6 +8,7 @@ import {
   today,
   upcomingPrepDay,
 } from '@/lib/date'
+import { resolveAllocations, type ResolvedAllocation } from '@/lib/forecast/allocation'
 import { forecastSauce, type ForecastResult } from '@/lib/forecast/engine'
 import { DEFAULT_BAG_SIZES_ML, packVolume, type PackResult } from '@/lib/forecast/packing'
 import type {
@@ -184,8 +185,13 @@ export interface PlanItemView {
   finalMl: number
   /** `finalMl` packed into the fewest, least-wasteful bags. */
   pack: PackResult
-  /** Per-restaurant demand behind `suggestedMl`. */
-  allocations: Array<{ siteId: string; ml: number }>
+  /**
+   * How `finalMl` is divided between restaurants, with any manual pins already
+   * applied. Always sums to `finalMl` unless every restaurant is pinned.
+   */
+  allocations: ResolvedAllocation[]
+  /** Volume the pins leave unaccounted for. Zero in the normal case. */
+  allocationImbalanceMl: number
   reasoning: ForecastReasoning | null
 }
 
@@ -213,13 +219,19 @@ export async function getPlan(
 
   const { data: items, error } = await supabase
     .from('prep_plan_items')
-    .select('*, sauces(name, sort_order), prep_plan_allocations(site_id, suggested_ml)')
+    .select(
+      '*, sauces(name, sort_order), prep_plan_allocations(site_id, suggested_ml, override_ml)',
+    )
     .eq('plan_id', plan.id)
     .returns<
       Array<
         PrepPlanItem & {
           sauces: { name: string; sort_order: number } | null
-          prep_plan_allocations: Array<{ site_id: string; suggested_ml: number }> | null
+          prep_plan_allocations: Array<{
+            site_id: string
+            suggested_ml: number
+            override_ml: number | null
+          }> | null
         }
       >
     >()
@@ -228,6 +240,17 @@ export async function getPlan(
   const views: PlanItemView[] = (items ?? [])
     .map((item) => {
       const finalMl = item.override_ml ?? item.suggested_ml
+      // Resolved here rather than in the client, so the planner screen and the
+      // delivery run can never show different numbers for the same plan.
+      const split = resolveAllocations(
+        finalMl,
+        (item.prep_plan_allocations ?? []).map((allocation) => ({
+          siteId: allocation.site_id,
+          suggestedMl: allocation.suggested_ml,
+          overrideMl: allocation.override_ml,
+        })),
+      )
+
       return {
         id: item.id,
         sauceId: item.sauce_id,
@@ -237,10 +260,8 @@ export async function getPlan(
         overrideMl: item.override_ml,
         finalMl,
         pack: packVolume(finalMl, bagSizesMl),
-        allocations: (item.prep_plan_allocations ?? []).map((allocation) => ({
-          siteId: allocation.site_id,
-          ml: allocation.suggested_ml,
-        })),
+        allocations: split.allocations,
+        allocationImbalanceMl: split.imbalanceMl,
         reasoning: (item.reasoning as ForecastReasoning) ?? null,
       }
     })
@@ -298,7 +319,7 @@ export interface PrepLine {
   /** Bags produced for this line, this prep day. */
   bagsMade: number
   /** How much of `plannedMl` is each restaurant's demand. */
-  allocations: Array<{ siteId: string; ml: number }>
+  allocations: ResolvedAllocation[]
 }
 
 export interface PrepBoard {
@@ -396,7 +417,7 @@ export async function getPrepBoard(options: {
       checklistId: row.id,
       unplanned: true,
       bagsMade: bagCounts.get(row.sauce_id) ?? 0,
-      allocations: [] as Array<{ siteId: string; ml: number }>,
+      allocations: [] as ResolvedAllocation[],
     }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.sauceName.localeCompare(b.sauceName))
     .map(({ sortOrder: _sortOrder, ...rest }) => rest)

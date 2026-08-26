@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { PageHeader } from '@/components/app/PageHeader'
 import { PlannerBoard } from './PlannerBoard'
-import { requireManager } from '@/lib/auth'
+import { requirePrepAccess } from '@/lib/auth'
 import { buildCombinedForecast, getPlan } from '@/lib/queries/planning'
 import { describePrepDays, formatShort, isPrepDay, today, upcomingPrepDay } from '@/lib/date'
 import { EmptyState } from '@/components/ui'
@@ -13,7 +13,9 @@ export default async function PlannerPage({
 }: {
   searchParams: { date?: string }
 }) {
-  const context = await requireManager()
+  // Prep access rather than manager: the kitchen team both plans and cooks, so
+  // making them switch accounts between the two screens helped nobody.
+  const context = await requirePrepAccess()
 
   if (!context.prepSite) {
     return (

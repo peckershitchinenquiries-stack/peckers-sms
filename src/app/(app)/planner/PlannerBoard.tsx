@@ -11,6 +11,7 @@ import {
   Drawer,
   EmptyState,
   Icon,
+  Modal,
   Stepper,
   Table,
   useToast,
@@ -19,9 +20,11 @@ import { ForecastExplainer } from './ForecastExplainer'
 import {
   generatePlan,
   resetPlanOverrides,
+  setAllocationOverride,
   setPlanItemOverride,
   setPlanStatus,
 } from '@/lib/actions/planner'
+import { resolveAllocations } from '@/lib/forecast/allocation'
 import { formatShort, type DateOnly } from '@/lib/date'
 import { formatMl } from '@/lib/utils/volume'
 import type { CombinedForecast, PlanView } from '@/lib/queries/planning'
@@ -53,6 +56,7 @@ export function PlannerBoard({
     reasoning: ForecastReasoning
   } | null>(null)
   const [drafts, setDrafts] = React.useState<Record<string, number>>({})
+  const [splitting, setSplitting] = React.useState<string | null>(null)
 
   // Show the live forecast alongside whatever is saved, so a manager always
   // sees today's numbers even before pressing Build.
@@ -65,12 +69,19 @@ export function PlannerBoard({
       const override = item?.overrideMl ?? null
       const make = drafts[forecast.sauceId] ?? override ?? suggested
 
-      // Split the final quantity across restaurants in the same proportion the
-      // forecast asked for, so a manual change flows through to dispatch.
-      const allocations = item?.allocations.length
-        ? item.allocations
-        : forecast.bySite.map((entry) => ({ siteId: entry.siteId, ml: entry.ml }))
-      const allocationTotal = allocations.reduce((sum, entry) => sum + entry.ml, 0)
+      // Recomputed against the current "make" figure so an unsaved change to
+      // the total shows its effect on each restaurant straight away. The same
+      // function runs on the server, so the two can't drift apart.
+      const split = resolveAllocations(
+        make,
+        item?.allocations.length
+          ? item.allocations.map((entry) => ({
+              siteId: entry.siteId,
+              suggestedMl: entry.suggestedMl,
+              overrideMl: entry.overrideMl,
+            }))
+          : forecast.bySite.map((entry) => ({ siteId: entry.siteId, suggestedMl: entry.ml })),
+      )
 
       return {
         forecast,
@@ -79,18 +90,17 @@ export function PlannerBoard({
         override,
         make,
         changed: override !== null && override !== suggested,
-        split: allocations.map((entry) => ({
-          siteId: entry.siteId,
+        split: split.allocations.map((entry) => ({
+          ...entry,
           siteName: sites.find((site) => site.id === entry.siteId)?.name ?? 'Unknown',
-          ml:
-            allocationTotal > 0
-              ? Math.round((entry.ml / allocationTotal) * make)
-              : Math.round(make / Math.max(allocations.length, 1)),
         })),
+        imbalanceMl: split.imbalanceMl,
         reasoning: item?.reasoning ?? forecast.reasoning,
       }
     })
   }, [forecasts, plan, drafts, sites])
+
+  const splittingRow = rows.find((row) => row.forecast.sauceId === splitting) ?? null
 
   const totals = React.useMemo(
     () => ({
@@ -137,6 +147,29 @@ export function PlannerBoard({
         itemId,
         overrideMl: value === suggested ? null : value,
       })
+      if (!result.ok) {
+        toast({ tone: 'danger', title: 'Could not save', description: result.error })
+      }
+      router.refresh()
+    })
+  }
+
+  /**
+   * Pins (or unpins) one restaurant's share. The batch total doesn't move —
+   * the other restaurants take up the slack.
+   */
+  const changeShare = (itemId: string | null, siteId: string, overrideMl: number | null) => {
+    if (!itemId) {
+      toast({
+        tone: 'warning',
+        title: 'Build the plan first',
+        description: 'Press “Build plan” before setting each restaurant’s share.',
+      })
+      return
+    }
+
+    startTransition(async () => {
+      const result = await setAllocationOverride({ itemId, siteId, overrideMl })
       if (!result.ok) {
         toast({ tone: 'danger', title: 'Could not save', description: result.error })
       }
@@ -311,13 +344,28 @@ export function PlannerBoard({
                 row.make === 0 ? (
                   <span className="text-ink-subtle">—</span>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSplitting(row.forecast.sauceId)}
+                    aria-label={`Change how much of ${row.forecast.sauceName} each restaurant gets`}
+                    className="group flex flex-wrap items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-surface-sunken focus-ring"
+                  >
                     {row.split.map((entry) => (
-                      <Badge key={entry.siteId} tone="neutral" size="sm">
+                      <Badge
+                        key={entry.siteId}
+                        tone={entry.pinned ? 'brand' : 'neutral'}
+                        size="sm"
+                        icon={entry.pinned ? 'edit' : undefined}
+                      >
                         {entry.siteName} {formatMl(entry.ml)}
                       </Badge>
                     ))}
-                  </div>
+                    <Icon
+                      name="chevron-down"
+                      size={13}
+                      className="text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100"
+                    />
+                  </button>
                 ),
             },
             {
@@ -346,6 +394,81 @@ export function PlannerBoard({
         Amounts are worked out from the last few weeks of usage at every restaurant, plus a safety
         margin. Change anything you disagree with — a rebuild keeps your changes.
       </p>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Who gets how much                                                  */}
+      {/* ------------------------------------------------------------------ */}
+      <Modal
+        open={Boolean(splittingRow)}
+        onClose={() => setSplitting(null)}
+        title={splittingRow ? `Splitting ${splittingRow.forecast.sauceName}` : ''}
+        description={
+          splittingRow
+            ? `${formatMl(splittingRow.make)} to divide up. Setting one restaurant's share moves the difference to the others — it doesn't change how much you make.`
+            : ''
+        }
+        size="sm"
+        footer={
+          <Button variant="ghost" onClick={() => setSplitting(null)}>
+            Done
+          </Button>
+        }
+      >
+        {splittingRow ? (
+          <div className="space-y-5">
+            {splittingRow.imbalanceMl > 0 ? (
+              <Callout tone="warning" title="More set than you're making">
+                The shares add up to {formatMl(splittingRow.make + splittingRow.imbalanceMl)}, which
+                is {formatMl(splittingRow.imbalanceMl)} more than this batch. Raise the amount to
+                make, or lower a share.
+              </Callout>
+            ) : null}
+
+            {splittingRow.split.map((entry) => (
+              <div key={entry.siteId} className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink">
+                    <Icon name="map-pin" size={14} className="text-ink-muted" />
+                    {entry.siteName}
+                  </span>
+                  {entry.pinned ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leadingIcon="refresh-cw"
+                      disabled={busy}
+                      onClick={() =>
+                        changeShare(splittingRow.itemId, entry.siteId, null)
+                      }
+                    >
+                      Use the forecast
+                    </Button>
+                  ) : (
+                    <span className="text-2xs text-ink-subtle">
+                      takes whatever is left over
+                    </span>
+                  )}
+                </div>
+
+                <Stepper
+                  size="sm"
+                  value={entry.ml}
+                  min={0}
+                  max={100_000}
+                  step={50}
+                  unit="ml"
+                  onChange={(value) => changeShare(splittingRow.itemId, entry.siteId, value)}
+                  className={entry.pinned ? 'border-brand' : undefined}
+                />
+
+                <p className="text-2xs text-ink-subtle">
+                  Forecast suggested {formatMl(entry.suggestedMl)}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Modal>
 
       {/* ------------------------------------------------------------------ */}
       {/* Why this number?                                                   */}

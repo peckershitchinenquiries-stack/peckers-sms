@@ -78,12 +78,15 @@ export function BatchLog({
       live: batches.reduce((sum, batch) => sum + batch.sealed + batch.opened, 0),
       used: batches.reduce((sum, batch) => sum + batch.used, 0),
       discarded: batches.reduce((sum, batch) => sum + batch.discarded, 0),
+      wastedMl: batches.reduce((sum, batch) => sum + batch.wastedMl, 0),
     }),
     [batches],
   )
 
+  // By volume, not by bag count: a 2L bag binned with 200ml left is a very
+  // different loss from one binned full, and counting bags hid that.
   const wastePercent =
-    totals.bags > 0 ? Math.round((totals.discarded / totals.bags) * 1000) / 10 : 0
+    totals.ml > 0 ? Math.round((totals.wastedMl / totals.ml) * 1000) / 10 : 0
 
   const setRange = (next: { from: DateOnly | null; to: DateOnly | null }) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -163,7 +166,7 @@ export function BatchLog({
           unit="%"
           icon="trash"
           tone={wastePercent > 8 ? 'danger' : wastePercent > 4 ? 'warning' : 'success'}
-          hint={`${totals.discarded} bags discarded`}
+          hint={`${formatMl(totals.wastedMl)} across ${totals.discarded} bag${totals.discarded === 1 ? '' : 's'}`}
         />
       </div>
 
@@ -284,7 +287,7 @@ export function BatchLog({
                   ) : null}
                   {row.discarded > 0 ? (
                     <Badge tone="danger" size="sm" icon="trash">
-                      {row.discarded}
+                      {formatMl(row.wastedMl)} wasted
                     </Badge>
                   ) : null}
                 </div>

@@ -15,8 +15,9 @@ import {
   useToast,
 } from '@/components/ui'
 import { BagSizeBadge, BagStatusBadge, ExpiryBadge } from '@/components/app/StatusPills'
-import { setBagStatus, setManyBagStatuses } from '@/lib/actions/batches'
+import { setBagStatus, sweepExpiredStock } from '@/lib/actions/batches'
 import { formatRelativeDay, formatShort, formatTimeOfDay } from '@/lib/date'
+import { formatMl } from '@/lib/utils/volume'
 import type { ExpirySummary, TrackedBag } from '@/lib/queries/stock'
 
 type Filter = 'attention' | 'all' | 'sealed' | 'opened'
@@ -25,7 +26,6 @@ export interface ExpiryTrackerProps {
   bags: TrackedBag[]
   summary: ExpirySummary
   sauces: Array<{ id: string; name: string }>
-  isManager: boolean
   showSiteColumn: boolean
 }
 
@@ -33,7 +33,6 @@ export function ExpiryTracker({
   bags,
   summary,
   sauces,
-  isManager,
   showSiteColumn,
 }: ExpiryTrackerProps) {
   const router = useRouter()
@@ -61,10 +60,8 @@ export function ExpiryTracker({
     }
   }, [bags, filter, sauceId])
 
-  const expiredIds = React.useMemo(
-    () => bags.filter((bag) => bag.level === 'expired').map((bag) => bag.id),
-    [bags],
-  )
+  const expired = React.useMemo(() => bags.filter((bag) => bag.level === 'expired'), [bags])
+  const expiredMl = expired.reduce((sum, bag) => sum + bag.remainingMl, 0)
 
   const updateBag = (bag: TrackedBag, status: 'used' | 'discarded' | 'opened') => {
     setPendingId(bag.id)
@@ -161,14 +158,16 @@ export function ExpiryTracker({
                 ...sauces.map((sauce) => ({ value: sauce.id, label: sauce.name })),
               ]}
             />
-            {isManager && expiredIds.length > 0 ? (
+            {/* Open to everyone: the person clearing the fridge at close is
+                rarely the manager, and unrecorded waste is invisible waste. */}
+            {expired.length > 0 ? (
               <Button
                 variant="destructive"
                 size="sm"
                 leadingIcon="trash"
                 onClick={() => setDiscardAllOpen(true)}
               >
-                Discard {expiredIds.length} expired
+                Write off {expired.length} expired
               </Button>
             ) : null}
           </div>
@@ -206,6 +205,13 @@ export function ExpiryTracker({
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-ink">{bag.sauceName}</span>
                   <BagSizeBadge sizeMl={bag.sizeMl} />
+                  {/* What's actually left is what gets binned, and it's the
+                      number staff need when deciding what to use up first. */}
+                  {bag.remainingMl < bag.sizeMl ? (
+                    <span className="text-2xs tabular-nums text-ink-subtle">
+                      {formatMl(bag.remainingMl)} left
+                    </span>
+                  ) : null}
                 </div>
               ),
             },
@@ -327,24 +333,27 @@ export function ExpiryTracker({
         open={discardAllOpen}
         onClose={() => setDiscardAllOpen(false)}
         onConfirm={async () => {
-          const result = await setManyBagStatuses({
-            bagIds: expiredIds,
-            status: 'discarded',
-            reason: 'Expired',
-          })
+          // The sweep re-checks dates server-side rather than trusting a list
+          // of ids the page may have been holding for a while.
+          const result = await sweepExpiredStock({})
           if (result.ok) {
+            const { bags: swept, ml } = result.data!
             toast({
-              tone: 'warning',
-              title: `${expiredIds.length} bags recorded as waste`,
-              description: 'Stock levels and the forecast have been updated.',
+              tone: swept > 0 ? 'warning' : 'success',
+              title:
+                swept > 0 ? `${formatMl(ml)} recorded as waste` : 'Nothing needed writing off',
+              description:
+                swept > 0
+                  ? `${swept} bag${swept === 1 ? '' : 's'} removed from live stock. The figure shows on the wastage report.`
+                  : 'Everything on the shelf is still within its date.',
             })
             router.refresh()
           } else {
-            toast({ tone: 'danger', title: 'Could not discard', description: result.error })
+            toast({ tone: 'danger', title: 'Could not write off', description: result.error })
           }
         }}
-        title={`Discard ${expiredIds.length} expired bags?`}
-        description="They will be recorded as waste against today's date and removed from live stock."
+        title={`Write off ${expired.length} expired bag${expired.length === 1 ? '' : 's'}?`}
+        description={`${formatMl(expiredMl)} is still in them. That volume will be recorded as waste against today and removed from live stock.`}
         confirmLabel="Record as waste"
         tone="destructive"
       />

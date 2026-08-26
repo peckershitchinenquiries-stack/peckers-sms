@@ -290,6 +290,7 @@ function PrepRow({
   const router = useRouter()
   const { toast } = useToast()
   const [busy, startTransition] = React.useTransition()
+  const [confirming, setConfirming] = React.useState(false)
 
   // Pre-filled with the least-wasteful way to hit the planned volume, so the
   // common case ("we made exactly what was asked") is a single tap.
@@ -310,6 +311,7 @@ function PrepRow({
     startTransition(async () => {
       const result = await completePrepLine({ sauceId: line.sauceId, prepDate, pack })
       if (result.ok) {
+        setConfirming(false)
         toast({
           tone: 'success',
           title: `${line.sauceName} done`,
@@ -391,41 +393,13 @@ function PrepRow({
             </Button>
           ) : (
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:shrink-0">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {bagSizesMl.map((size) => {
-                  const count = pack[size] ?? 0
-                  return (
-                    <div
-                      key={size}
-                      className={`flex items-center overflow-hidden rounded-lg border bg-surface ${
-                        count > 0 ? 'border-brand/45' : 'border-border'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        disabled={count <= 0 || locked}
-                        onClick={() => setCount(size, count - 1)}
-                        aria-label={`One fewer ${formatMl(size)} bag of ${line.sauceName}`}
-                        className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
-                      >
-                        <Icon name="minus" size={13} />
-                      </button>
-                      <span className="w-[4.25rem] text-center text-sm font-medium tabular-nums text-ink">
-                        {count} × {formatMl(size)}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={locked}
-                        onClick={() => setCount(size, count + 1)}
-                        aria-label={`One more ${formatMl(size)} bag of ${line.sauceName}`}
-                        className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
-                      >
-                        <Icon name="plus" size={13} />
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
+              <BagPicker
+                sauceName={line.sauceName}
+                bagSizesMl={bagSizesMl}
+                pack={pack}
+                locked={locked}
+                onChange={setCount}
+              />
 
               <div className="flex items-center gap-3">
                 <span className="whitespace-nowrap text-sm tabular-nums text-ink-muted">
@@ -441,9 +415,8 @@ function PrepRow({
                 <Button
                   size="lg"
                   leadingIcon="check"
-                  loading={busy}
                   disabled={totalBags < 1 || locked}
-                  onClick={markMade}
+                  onClick={() => setConfirming(true)}
                 >
                   Made it
                 </Button>
@@ -452,6 +425,145 @@ function PrepRow({
           )}
         </div>
       </Card>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Last look at the bags before the batch is sealed                    */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Bag size is decided at the machine, not on paper: a litre of mayo   */}
+      {/* goes in a 2L bag so it doesn't burst under vacuum. This is the last */}
+      {/* moment that choice can be recorded, so it gets its own step.        */}
+      <Modal
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title={`${line.sauceName} — how did it go in?`}
+        description="Check the bags you actually used. Record the sauce that went in, not the size of the bag it went into."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirming(false)}>
+              Back
+            </Button>
+            <Button
+              leadingIcon="check"
+              loading={busy}
+              disabled={totalBags < 1}
+              onClick={markMade}
+            >
+              Seal {totalBags} bag{totalBags === 1 ? '' : 's'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <BagPicker
+            sauceName={line.sauceName}
+            bagSizesMl={bagSizesMl}
+            pack={pack}
+            locked={false}
+            onChange={setCount}
+            stacked
+          />
+
+          <div className="rounded-lg bg-surface-sunken p-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm text-ink-muted">Total made</span>
+              <span className="text-xl font-semibold tabular-nums text-ink">
+                {formatMl(totalMl)}
+              </span>
+            </div>
+            {line.plannedMl > 0 ? (
+              <div className="mt-2 flex items-baseline justify-between gap-3 border-t border-border pt-2">
+                <span className="text-sm text-ink-muted">Against the plan</span>
+                <span
+                  className={`text-sm font-medium tabular-nums ${
+                    difference === 0
+                      ? 'text-success'
+                      : difference > 0
+                        ? 'text-warning'
+                        : 'text-danger'
+                  }`}
+                >
+                  {difference === 0
+                    ? 'Bang on'
+                    : `${difference > 0 ? '+' : ''}${formatMl(difference)}`}
+                </span>
+              </div>
+            ) : null}
+          </div>
+
+          <p className="text-xs text-ink-subtle">
+            Each bag starts its own shelf-life clock the moment you seal it.
+          </p>
+        </div>
+      </Modal>
     </motion.li>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bag counts — one −/+ control per configured size                           */
+/* -------------------------------------------------------------------------- */
+
+function BagPicker({
+  sauceName,
+  bagSizesMl,
+  pack,
+  locked,
+  onChange,
+  stacked = false,
+}: {
+  sauceName: string
+  bagSizesMl: number[]
+  pack: Record<number, number>
+  locked: boolean
+  onChange: (size: number, count: number) => void
+  /** One row per size, for the roomier confirm step. */
+  stacked?: boolean
+}) {
+  return (
+    <div className={stacked ? 'space-y-2' : 'flex flex-wrap items-center gap-1.5'}>
+      {bagSizesMl.map((size) => {
+        const count = pack[size] ?? 0
+        return (
+          <div
+            key={size}
+            className={`flex items-center overflow-hidden rounded-lg border bg-surface ${
+              stacked ? 'justify-between' : ''
+            } ${count > 0 ? 'border-brand/45' : 'border-border'}`}
+          >
+            {stacked ? (
+              <span className="pl-3.5 text-sm font-medium text-ink">{formatMl(size)} bags</span>
+            ) : null}
+            <div className="flex items-center">
+              <button
+                type="button"
+                disabled={count <= 0 || locked}
+                onClick={() => onChange(size, count - 1)}
+                aria-label={`One fewer ${formatMl(size)} bag of ${sauceName}`}
+                className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
+              >
+                <Icon name="minus" size={13} />
+              </button>
+              <span
+                className={`text-center text-sm font-medium tabular-nums text-ink ${
+                  stacked ? 'w-10' : 'w-[4.25rem]'
+                }`}
+              >
+                {stacked ? count : `${count} × ${formatMl(size)}`}
+              </span>
+              <button
+                type="button"
+                disabled={locked}
+                onClick={() => onChange(size, count + 1)}
+                aria-label={`One more ${formatMl(size)} bag of ${sauceName}`}
+                className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
+              >
+                <Icon name="plus" size={13} />
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }

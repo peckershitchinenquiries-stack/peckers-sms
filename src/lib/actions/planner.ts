@@ -22,10 +22,9 @@ export async function generatePlan(input: {
   prepDate: DateOnly
 }): Promise<ActionResult<{ planId: string; items: number }>> {
   try {
+    // Prep access, not manager: the people who cook the sauce are the people
+    // who plan it. `requirePrepAccess` already shuts out a receiving store.
     const context = await requirePrepAccess()
-    if (!context.isManager) {
-      return fail(new Error('Only a manager can build the prep plan.'))
-    }
 
     if (!isPrepDay(input.prepDate, context.prepWeekdays)) {
       return fail(new Error('That date is not a prep day.'))
@@ -114,14 +113,13 @@ export async function generatePlan(input: {
   }
 }
 
-/** Manager override for a single sauce. Pass `null` to fall back to the suggestion. */
+/** Manual override for a single sauce. Pass `null` to fall back to the suggestion. */
 export async function setPlanItemOverride(input: {
   itemId: string
   overrideMl: number | null
 }): Promise<ActionResult> {
   try {
-    const context = await requirePrepAccess()
-    if (!context.isManager) return fail(new Error('Only a manager can change the plan.'))
+    await requirePrepAccess()
 
     if (input.overrideMl !== null && (input.overrideMl < 0 || input.overrideMl > 100_000)) {
       return fail(new Error('Enter between 0 and 100,000 ml.'))
@@ -136,9 +134,53 @@ export async function setPlanItemOverride(input: {
 
     revalidatePath('/planner')
     revalidatePath('/prep')
+    revalidatePath('/dispatch', 'layout')
     return ok()
   } catch (error) {
     return fail(error, 'Could not save the change.')
+  }
+}
+
+/**
+ * Pins how much of one sauce a single restaurant gets.
+ *
+ * Hitchin is consistently sent less than Stevenage whatever the forecast says,
+ * so its share needs to be settable by hand. Pinning does not change how much
+ * is cooked — the batch total stays put and the other restaurants absorb the
+ * difference (see `resolveAllocations`). Pass `null` to unpin.
+ */
+export async function setAllocationOverride(input: {
+  itemId: string
+  siteId: string
+  overrideMl: number | null
+}): Promise<ActionResult> {
+  try {
+    const context = await requirePrepAccess()
+
+    if (input.overrideMl !== null && (input.overrideMl < 0 || input.overrideMl > 100_000)) {
+      return fail(new Error('Enter between 0 and 100,000 ml.'))
+    }
+    // Checked against every store rather than the caller's own scope: a prep
+    // cook is scoped to the kitchen alone, yet splitting the batch across the
+    // restaurants it feeds is exactly their job.
+    if (!context.allSites.some((site) => site.id === input.siteId)) {
+      return fail(new Error('That restaurant is not on the system.'))
+    }
+
+    const supabase = createServerSupabase()
+    const { error } = await supabase
+      .from('prep_plan_allocations')
+      .update({ override_ml: input.overrideMl })
+      .eq('item_id', input.itemId)
+      .eq('site_id', input.siteId)
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/planner')
+    revalidatePath('/prep')
+    revalidatePath('/dispatch', 'layout')
+    return ok()
+  } catch (error) {
+    return fail(error, 'Could not save that restaurant’s share.')
   }
 }
 
@@ -148,8 +190,7 @@ export async function setPlanStatus(input: {
   status: 'draft' | 'confirmed' | 'completed' | 'cancelled'
 }): Promise<ActionResult> {
   try {
-    const context = await requirePrepAccess()
-    if (!context.isManager) return fail(new Error('Only a manager can change the plan.'))
+    await requirePrepAccess()
 
     const supabase = createServerSupabase()
     const { error } = await supabase
@@ -170,18 +211,31 @@ export async function setPlanStatus(input: {
 /** Clears every manual change on a plan, reverting to the forecast's numbers. */
 export async function resetPlanOverrides(planId: string): Promise<ActionResult> {
   try {
-    const context = await requirePrepAccess()
-    if (!context.isManager) return fail(new Error('Only a manager can change the plan.'))
+    await requirePrepAccess()
 
     const supabase = createServerSupabase()
-    const { error } = await supabase
+    const { data: items, error } = await supabase
       .from('prep_plan_items')
       .update({ override_ml: null })
       .eq('plan_id', planId)
+      .select('id')
+      .returns<Array<{ id: string }>>()
     if (error) throw new Error(error.message)
+
+    // "Undo my changes" has to mean all of them — a per-restaurant pin left
+    // behind would keep bending a plan the manager thinks they just reset.
+    const itemIds = (items ?? []).map((item) => item.id)
+    if (itemIds.length > 0) {
+      const { error: allocationError } = await supabase
+        .from('prep_plan_allocations')
+        .update({ override_ml: null })
+        .in('item_id', itemIds)
+      if (allocationError) throw new Error(allocationError.message)
+    }
 
     revalidatePath('/planner')
     revalidatePath('/prep')
+    revalidatePath('/dispatch', 'layout')
     return ok()
   } catch (error) {
     return fail(error, 'Could not reset the quantities.')

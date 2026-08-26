@@ -46,6 +46,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, message: 'No sites configured.' })
     }
 
+    // Write off anything that ran out of shelf life, before anything else
+    // reads stock levels. Whatever was left in those bags is recorded as
+    // waste, which is where the dashboard's wastage figures come from.
+    //
+    // Deliberately not fatal: a digest that goes out without the sweep is far
+    // better than no digest at all.
+    let swept: { bags: number; ml: number } | null = null
+    const { data: sweepResult, error: sweepError } = await supabase.rpc('expire_stock', {
+      p_as_of: asOf,
+      p_site_id: null,
+    })
+    if (sweepError) {
+      console.error('[cron/digest] expire_stock failed:', sweepError.message)
+    } else {
+      swept = sweepResult as { bags: number; ml: number }
+    }
+
     // Refresh alerts first so the digest and the in-app alert centre agree.
     const scan = await runAlertScan(supabase, {
       sites: siteList.map((site) => ({ id: site.id, name: site.name })),
@@ -136,6 +153,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       date: asOf,
+      wasteSwept: swept,
       alertsCreated: scan.created,
       alertsSkipped: scan.skipped,
       email: delivery,

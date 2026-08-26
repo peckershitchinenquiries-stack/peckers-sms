@@ -54,7 +54,9 @@ const NAV: NavItem[] = [
     href: '/planner',
     label: 'Prep planner',
     icon: 'sparkles',
-    roles: ['manager'],
+    // The kitchen team plans as well as cooks, so this belongs to anyone who
+    // preps. `prepOnly` still keeps it away from a receiving store.
+    roles: ['manager', 'staff'],
     prepOnly: true,
     description: 'How much to make',
   },
@@ -94,6 +96,13 @@ const NAV: NavItem[] = [
     icon: 'bell',
     roles: ['manager', 'staff'],
     description: 'Stock and expiry warnings',
+  },
+  {
+    href: '/waste',
+    label: 'Wastage',
+    icon: 'trash',
+    roles: ['manager', 'staff'],
+    description: 'What got thrown away',
   },
   {
     href: '/batches',

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { requireSession, requireWriteSite } from '@/lib/auth'
 import { type DateOnly, sealedExpiryFor, today } from '@/lib/date'
+import type { ExpireStockResult, TransferStockResult } from '@/lib/types/database'
 import { fail, ok, type ActionResult } from './types'
 
 /** Validates a `{ sizeMl: count }` pack and returns its totals. */
@@ -87,44 +88,39 @@ export async function logBatch(input: {
 }
 
 /**
- * Completes the vacuum-pack step and creates the bags in one go — the action
- * behind the big "Pack" button on the prep checklist.
+ * Writes off everything past its shelf life.
+ *
+ * The kitchen's rule is that a batch is used until its last day and whatever
+ * is left that night goes in the bin, so this is the software equivalent of
+ * the Saturday-night chuck. Each bag's leftover volume lands in `waste_logs`
+ * via a database trigger, which is what the dashboard's waste figures read.
+ *
+ * Runs nightly from the digest cron, and on demand from the expiry tracker
+ * for anyone who'd rather not wait.
  */
-export async function completeVacuumPack(input: {
-  checklistId: string
-  sessionId: string
-  sauceId: string
-  siteId: string
-  prepDate: DateOnly
-  pack: Record<number, number>
-}): Promise<ActionResult<{ created: number; createdMl: number }>> {
+export async function sweepExpiredStock(input: { siteId?: string | null } = {}): Promise<
+  ActionResult<ExpireStockResult>
+> {
   try {
     const context = await requireSession()
-    const siteId = requireWriteSite(context, input.siteId)
-    const { totalBags, totalMl } = validatePack(input.pack)
+    // Staff sweep their own restaurant; a manager may sweep one or all.
+    const siteId = context.isManager ? (input.siteId ?? null) : context.profile.site_id
+
     const supabase = createServerSupabase()
-
-    const { error: rpcError } = await supabase.rpc('create_batch_bags', {
+    const { data, error } = await supabase.rpc('expire_stock', {
+      p_as_of: today(),
       p_site_id: siteId,
-      p_sauce_id: input.sauceId,
-      p_session_id: input.sessionId,
-      p_prep_date: input.prepDate,
-      p_pack: input.pack,
     })
-    if (rpcError) throw new Error(rpcError.message)
+    if (error) throw new Error(error.message)
 
-    const { error: stepError } = await supabase
-      .from('prep_checklist')
-      .update({ vacuum_packed_at: new Date().toISOString(), planned_ml: totalMl })
-      .eq('id', input.checklistId)
-    if (stepError) throw new Error(stepError.message)
-
-    revalidatePath('/prep')
-    revalidatePath('/batches')
     revalidatePath('/expiry')
-    return ok({ created: totalBags, createdMl: totalMl })
+    revalidatePath('/waste')
+    revalidatePath('/today')
+    revalidatePath('/dashboard')
+    revalidatePath('/batches')
+    return ok(data as ExpireStockResult)
   } catch (error) {
-    return fail(error, 'Could not record the vacuum pack.')
+    return fail(error, 'Could not write off the expired stock.')
   }
 }
 
@@ -200,34 +196,46 @@ export async function transferBags(input: {
 
     const supabase = createServerSupabase()
 
-    // Move the freshest bags — the ones most likely to survive the journey and
-    // still be usable at the receiving site.
+    // The alert asks in bags, but stock moves by volume, so price the request
+    // first: the freshest N sealed bags — exactly the ones `transfer_stock`
+    // will pick, since it orders the same way.
     const { data: candidates, error: selectError } = await supabase
       .from('bags')
-      .select('id')
+      .select('remaining_ml')
       .eq('sauce_id', input.sauceId)
       .eq('site_id', input.fromSiteId)
       .eq('status', 'sealed')
+      .gt('remaining_ml', 0)
       .order('sealed_expiry', { ascending: false })
+      .order('prep_date', { ascending: false })
       .limit(input.quantity)
-      .returns<Array<{ id: string }>>()
+      .returns<Array<{ remaining_ml: number }>>()
     if (selectError) throw new Error(selectError.message)
 
-    const ids = (candidates ?? []).map((row) => row.id)
-    if (ids.length === 0) {
+    const ml = (candidates ?? []).reduce((sum, bag) => sum + bag.remaining_ml, 0)
+    if (ml === 0) {
       return fail(new Error('No sealed bags available to move.'))
     }
 
-    const { error } = await supabase
-      .from('bags')
-      .update({ site_id: input.toSiteId })
-      .in('id', ids)
+    // Through the RPC rather than a bare `update bags set site_id`, so the move
+    // is written to `stock_transfers` and shows up in the delivery history and
+    // in "sent today" on the dashboard.
+    const { data, error } = await supabase.rpc('transfer_stock', {
+      p_sauce_id: input.sauceId,
+      p_from_site: input.fromSiteId,
+      p_to_site: input.toSiteId,
+      p_ml: ml,
+      p_date: today(),
+    })
     if (error) throw new Error(error.message)
+
+    const result = data as TransferStockResult
 
     revalidatePath('/expiry')
     revalidatePath('/dashboard')
     revalidatePath('/alerts')
-    return ok({ moved: ids.length })
+    revalidatePath('/dispatch', 'layout')
+    return ok({ moved: result.moved_bags })
   } catch (error) {
     return fail(error, 'Could not move the stock.')
   }

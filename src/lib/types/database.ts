@@ -130,6 +130,8 @@ export interface Bag {
   site_id: string
   prep_session_id: string | null
   size_ml: number
+  /** How much is actually left in this bag. Drawn down by `consume_stock`. */
+  remaining_ml: number
   prep_date: string
   sealed_expiry: string
   status: BagStatus
@@ -215,6 +217,7 @@ export interface BagExpiryRow {
   site_id: string
   prep_session_id: string | null
   size_ml: number
+  remaining_ml: number
   prep_date: string
   status: BagStatus
   sealed_expiry: string
@@ -297,11 +300,46 @@ export interface OpenStockResult {
   usage_total_ml?: number
 }
 
+/**
+ * What `consume_stock` actually managed to draw down.
+ *
+ * `shortfall_ml` above zero means the kitchen used more than the system knew
+ * about — worth telling the person logging it, not worth blocking them.
+ */
+export interface ConsumeStockResult {
+  requested_ml: number
+  consumed_ml: number
+  bags_opened: number
+  bags_emptied: number
+  shortfall_ml: number
+  usage_total_ml?: number
+}
+
 export interface TransferStockResult {
   requested_ml: number
   moved_ml: number
   moved_bags: number
   shortfall_ml: number
+}
+
+/** The nightly sweep's tally — how much was written off past its date. */
+export interface ExpireStockResult {
+  bags: number
+  ml: number
+}
+
+export interface WasteLog {
+  id: string
+  site_id: string
+  sauce_id: string
+  bag_id: string | null
+  waste_date: string
+  ml: number
+  reason: string | null
+  /** 'expired' is the automatic sweep; 'manual' is someone pressing Discard. */
+  source: 'expired' | 'manual'
+  created_by: string | null
+  created_at: string
 }
 
 /**

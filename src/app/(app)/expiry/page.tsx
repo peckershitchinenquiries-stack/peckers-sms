@@ -38,7 +38,6 @@ export default async function ExpiryPage({
         bags={bags}
         summary={summary}
         sauces={sauces.map((sauce) => ({ id: sauce.id, name: sauce.name }))}
-        isManager={context.isManager}
         showSiteColumn={siteId === null}
       />
     </>

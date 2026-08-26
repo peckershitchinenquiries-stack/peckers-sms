@@ -104,6 +104,97 @@ export async function getDailyUsageTotals(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Today's flow — made here, sent there, left over                            */
+/* -------------------------------------------------------------------------- */
+
+export interface TodayFlow {
+  date: DateOnly
+  /** Volume prepared at the kitchen today, as made (not as it stands now). */
+  preparedMl: number
+  preparedBags: number
+  /** One entry per restaurant the kitchen delivered to today. */
+  sent: Array<{ siteId: string; siteName: string; ml: number; bags: number }>
+  sentMl: number
+}
+
+/**
+ * The three numbers an admin asked to see on the dashboard: how much was made
+ * today, how much went out to each restaurant, and — via `live_stock` — what
+ * is left behind.
+ *
+ * `preparedMl` deliberately sums `size_ml`, not `remaining_ml`: it answers
+ * "what did the kitchen produce today", which doesn't change as the day's
+ * stock gets used.
+ */
+export async function getTodayFlow(options: {
+  prepSiteId: string
+  date?: DateOnly
+}): Promise<TodayFlow> {
+  const date = options.date ?? today()
+  const supabase = createServerSupabase()
+
+  const [preparedResult, sentResult] = await Promise.all([
+    supabase
+      .from('bags')
+      .select('size_ml')
+      .eq('site_id', options.prepSiteId)
+      .eq('prep_date', date)
+      .limit(20_000)
+      .returns<Array<{ size_ml: number }>>(),
+    supabase
+      .from('stock_transfers')
+      .select('to_site_id, ml, bags, sites!stock_transfers_to_site_id_fkey(name)')
+      .eq('from_site_id', options.prepSiteId)
+      .eq('transfer_date', date)
+      .returns<
+        Array<{
+          to_site_id: string
+          ml: number
+          bags: number
+          sites: { name: string } | null
+        }>
+      >(),
+  ])
+
+  if (preparedResult.error) {
+    throw new Error(`Loading today's prep: ${preparedResult.error.message}`)
+  }
+  if (sentResult.error) {
+    throw new Error(`Loading today's deliveries: ${sentResult.error.message}`)
+  }
+
+  const prepared = preparedResult.data ?? []
+
+  const sentBySite = new Map<string, { siteId: string; siteName: string; ml: number; bags: number }>()
+  for (const row of sentResult.data ?? []) {
+    let entry = sentBySite.get(row.to_site_id)
+    if (!entry) {
+      entry = {
+        siteId: row.to_site_id,
+        siteName: row.sites?.name ?? 'Unknown site',
+        ml: 0,
+        bags: 0,
+      }
+      sentBySite.set(row.to_site_id, entry)
+    }
+    entry.ml += row.ml
+    entry.bags += row.bags
+  }
+
+  const sent = Array.from(sentBySite.values()).sort((a, b) =>
+    a.siteName.localeCompare(b.siteName),
+  )
+
+  return {
+    date,
+    preparedMl: prepared.reduce((sum, bag) => sum + bag.size_ml, 0),
+    preparedBags: prepared.length,
+    sent,
+    sentMl: sent.reduce((sum, entry) => sum + entry.ml, 0),
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Batches                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -122,6 +213,10 @@ export interface BatchRow {
   opened: number
   used: number
   discarded: number
+  /** Volume still sitting in the bags from this batch. */
+  remainingMl: number
+  /** Volume thrown away from this batch — the leftovers in discarded bags. */
+  wastedMl: number
   sealedExpiry: DateOnly
 }
 
@@ -142,7 +237,7 @@ export async function getBatchHistory(options: {
   let query = supabase
     .from('bags')
     .select(
-      'id, sauce_id, site_id, size_ml, prep_date, sealed_expiry, status, prep_session_id, sauces(name), sites(name)',
+      'id, sauce_id, site_id, size_ml, remaining_ml, prep_date, sealed_expiry, status, prep_session_id, sauces(name), sites(name), waste_logs(ml)',
     )
     .order('prep_date', { ascending: false })
     .limit(options.limit ?? 4000)
@@ -160,11 +255,16 @@ export async function getBatchHistory(options: {
         | 'sauce_id'
         | 'site_id'
         | 'size_ml'
+        | 'remaining_ml'
         | 'prep_date'
         | 'sealed_expiry'
         | 'status'
         | 'prep_session_id'
-      > & { sauces: { name: string } | null; sites: { name: string } | null }
+      > & {
+        sauces: { name: string } | null
+        sites: { name: string } | null
+        waste_logs: Array<{ ml: number }> | null
+      }
     >
   >()
   if (error) throw new Error(`Loading batch history: ${error.message}`)
@@ -190,6 +290,8 @@ export async function getBatchHistory(options: {
         opened: 0,
         used: 0,
         discarded: 0,
+        remainingMl: 0,
+        wastedMl: 0,
         sealedExpiry: bag.sealed_expiry,
       }
       grouped.set(key, row)
@@ -197,6 +299,10 @@ export async function getBatchHistory(options: {
 
     row.totalBags += 1
     row.totalMl += bag.size_ml
+    row.remainingMl += bag.remaining_ml
+    // Waste is the volume that was actually in the bag when it was binned, so
+    // it comes from the waste ledger rather than being inferred from bag size.
+    row.wastedMl += (bag.waste_logs ?? []).reduce((sum, entry) => sum + entry.ml, 0)
     row.sizes[bag.size_ml] = (row.sizes[bag.size_ml] ?? 0) + 1
     if (bag.status === 'sealed') row.sealed += 1
     else if (bag.status === 'opened') row.opened += 1

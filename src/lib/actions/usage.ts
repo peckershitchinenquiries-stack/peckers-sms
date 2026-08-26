@@ -4,15 +4,16 @@ import { revalidatePath } from 'next/cache'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { requireSession, requireWriteSite } from '@/lib/auth'
 import { type DateOnly, today } from '@/lib/date'
-import type { OpenStockResult } from '@/lib/types/database'
+import type { ConsumeStockResult } from '@/lib/types/database'
 import { fail, ok, type ActionResult } from './types'
 
 /**
  * Records the volume (ml) used for one sauce on one day.
  *
- * The RPC does two things atomically: adds to the day's usage total, and
- * opens sealed bags (oldest expiry first) until their combined volume covers
- * it, which starts each opened bag's 2-day countdown.
+ * The RPC does two things atomically: adds to the day's usage total, and draws
+ * that volume out of the bags on the shelf, oldest expiry first. A bag emptied
+ * this way is marked used; one part-emptied stays open with its remainder
+ * intact, and that remainder is what becomes waste if it expires.
  */
 export async function recordUsage(input: {
   sauceId: string
@@ -20,7 +21,7 @@ export async function recordUsage(input: {
   siteId?: string
   usageDate?: DateOnly
   notes?: string
-}): Promise<ActionResult<OpenStockResult>> {
+}): Promise<ActionResult<ConsumeStockResult>> {
   try {
     const context = await requireSession()
     const siteId = requireWriteSite(context, input.siteId ?? context.profile.site_id)
@@ -44,7 +45,7 @@ export async function recordUsage(input: {
     revalidatePath('/today')
     revalidatePath('/dashboard')
 
-    return ok(data as OpenStockResult)
+    return ok(data as ConsumeStockResult)
   } catch (error) {
     return fail(error, 'Could not log that usage.')
   }

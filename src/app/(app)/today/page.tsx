@@ -219,7 +219,7 @@ export default async function TodayPage() {
                     </div>
                     <p className="mt-1 text-xs text-ink-muted">
                       {bag.status === 'opened'
-                        ? 'Opened — 2 day life'
+                        ? `Opened · ${formatMl(bag.remainingMl)} left`
                         : `Made on ${formatShort(bag.prepDate)}`}
                     </p>
                   </div>

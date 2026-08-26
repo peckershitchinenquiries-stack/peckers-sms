@@ -14,6 +14,7 @@
     "db:seed": "tsx supabase/seed/reference.ts",
     "db:seed:demo": "tsx supabase/seed/demo.ts",
     "db:create-manager": "tsx supabase/seed/create-manager.ts",
+    "db:reset:operational": "tsx supabase/seed/reset-operational.ts",
     "db:reset": "npx supabase db reset",
     "db:push": "npx supabase db push"
   },

@@ -3,13 +3,15 @@ import { PageHeader } from '@/components/app/PageHeader'
 import { requireManager, resolveSiteScope } from '@/lib/auth'
 import { getLiveStock, getTrackedBags, summariseExpiry } from '@/lib/queries/stock'
 import { buildForecast, getPrepVsPlan } from '@/lib/queries/planning'
-import { getAlerts, getDailyUsageTotals } from '@/lib/queries/activity'
+import { getAlerts, getDailyUsageTotals, getTodayFlow } from '@/lib/queries/activity'
+import { getWasteSummary } from '@/lib/queries/waste'
 import { getGrossSales, latestSalesDate } from '@/lib/vitamojo/sales'
 import {
   addDaysTo,
   daysUntilNextPrep,
   formatRelativeDay,
   formatShort,
+  isPrepDay,
   lastPrepDayOnOrBefore,
   nextPrepDayAfter,
   today,
@@ -60,17 +62,24 @@ export default async function DashboardPage({
   // gross sales is always yesterday's.
   const salesDate = latestSalesDate(asOf)
 
-  const [stock, bags, alerts, usageTotals, comparison, sales] = await Promise.all([
-    getLiveStock(siteId),
-    getTrackedBags({ siteId }),
-    getAlerts({ siteId, limit: 5 }),
-    getDailyUsageTotals(siteId, 14),
-    getPrepVsPlan({ siteId, from: addDaysTo(asOf, -7), to: asOf }),
-    getGrossSales(
-      salesDate,
-      context.allSites.map((site) => site.slug),
-    ),
-  ])
+  const [stock, bags, alerts, usageTotals, comparison, sales, todayFlow, waste] =
+    await Promise.all([
+      getLiveStock(siteId),
+      getTrackedBags({ siteId }),
+      getAlerts({ siteId, limit: 5 }),
+      getDailyUsageTotals(siteId, 14),
+      getPrepVsPlan({ siteId, from: addDaysTo(asOf, -7), to: asOf }),
+      getGrossSales(
+        salesDate,
+        context.allSites.map((site) => site.slug),
+      ),
+      // Prep and deliveries always belong to the kitchen that cooks, whatever
+      // store the dashboard is scoped to.
+      context.prepSite
+        ? getTodayFlow({ prepSiteId: context.prepSite.id, date: asOf })
+        : Promise.resolve(null),
+      getWasteSummary({ siteId, from: addDaysTo(asOf, -27), to: asOf }),
+    ])
 
   // Forecast the upcoming batch for every site in scope.
   const forecastSites = sitesInScope
@@ -104,6 +113,17 @@ export default async function DashboardPage({
   const attention = bags.filter((bag) => bag.daysRemaining <= 2).slice(0, 8)
 
   const weekVarianceMl = comparison.reduce((sum, row) => sum + row.variance_ml, 0)
+
+  // What is still sitting at the prep kitchen — the "how much is left at
+  // Stevenage" question, which is about the kitchen specifically and so is
+  // read from the unscoped stock rather than whatever site is selected.
+  const leftAtPrepSiteMl = context.prepSite
+    ? stock
+        .filter((row) => row.site_id === context.prepSite!.id)
+        .reduce((sum, row) => sum + row.usable_ml, 0)
+    : 0
+
+  const wasteTone = waste.todayMl > 0 ? 'warning' : waste.weekMl > 0 ? 'neutral' : 'success'
 
   return (
     <>
@@ -151,6 +171,71 @@ export default async function DashboardPage({
             />
           )
         })}
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Today's run — made here, sent there, left over, thrown away         */}
+      {/* ------------------------------------------------------------------ */}
+      <section
+        aria-label="Today's prep and deliveries"
+        className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      >
+        <StatCard
+          label="Prepped today"
+          value={formatMl(todayFlow?.preparedMl ?? 0)}
+          icon="chef-hat"
+          tone={todayFlow && todayFlow.preparedMl > 0 ? 'brand' : 'neutral'}
+          hint={
+            todayFlow && todayFlow.preparedBags > 0
+              ? `${todayFlow.preparedBags} bag${todayFlow.preparedBags === 1 ? '' : 's'} at ${context.prepSite?.name ?? 'the kitchen'}`
+              : isPrepDay(asOf, context.prepWeekdays)
+                ? 'Nothing made yet today'
+                : `Not a prep day · next ${formatShort(nextRestock.date)}`
+          }
+        />
+
+        {/* One card per restaurant the kitchen delivers to. */}
+        {context.dispatchDestinations.length > 0
+          ? context.dispatchDestinations.map((destination) => {
+              const sent = todayFlow?.sent.find((entry) => entry.siteId === destination.id)
+              return (
+                <StatCard
+                  key={destination.id}
+                  label={`Sent to ${destination.name}`}
+                  value={formatMl(sent?.ml ?? 0)}
+                  icon="truck"
+                  tone={sent ? 'brand' : 'neutral'}
+                  hint={
+                    sent
+                      ? `${sent.bags} bag${sent.bags === 1 ? '' : 's'} today`
+                      : 'Nothing sent today'
+                  }
+                />
+              )
+            })
+          : null}
+
+        {context.prepSite && (siteId === null || siteId === context.prepSite.id) ? (
+          <StatCard
+            label={`Left at ${context.prepSite.name}`}
+            value={formatMl(leftAtPrepSiteMl)}
+            icon="package"
+            tone="neutral"
+            hint="Still on the shelf right now"
+          />
+        ) : null}
+
+        <StatCard
+          label="Wasted today"
+          value={formatMl(waste.todayMl)}
+          icon="trash"
+          tone={wasteTone}
+          hint={
+            waste.weekMl > 0
+              ? `${formatMl(waste.weekMl)} over the last 7 days`
+              : 'Nothing wasted this week'
+          }
+        />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -321,7 +406,9 @@ export default async function DashboardPage({
                       <span>·</span>
                       <span className="capitalize">{bag.status}</span>
                       <span>·</span>
-                      <span>{formatMl(bag.sizeMl)}</span>
+                      {/* What's left, not what the bag holds — that's the
+                          volume that becomes waste if nobody uses it. */}
+                      <span>{formatMl(bag.remainingMl)} left</span>
                     </p>
                   </div>
                   <ExpiryBadge level={bag.level} label={bag.label} size="sm" />
@@ -405,6 +492,59 @@ export default async function DashboardPage({
           </div>
         </Card>
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Where the waste is                                                 */}
+      {/* ------------------------------------------------------------------ */}
+      <Card className="mt-6">
+        <CardHeader
+          eyebrow="Last 28 days"
+          title="Wastage by sauce"
+          description={
+            waste.totalMl === 0
+              ? 'Nothing has been binned or written off in the last four weeks.'
+              : `${formatMl(waste.totalMl)} thrown away — the volume left in each bag when it went, not the size of the bag.`
+          }
+          actions={
+            <LinkButton href="/waste" variant="ghost" size="sm" trailingIcon="arrow-right">
+              Full report
+            </LinkButton>
+          }
+        />
+
+        {waste.bySauce.length === 0 ? (
+          <EmptyState
+            icon="check"
+            size="sm"
+            title="No waste recorded"
+            description="Every batch has been used within its shelf life."
+          />
+        ) : (
+          <ul className="space-y-2.5">
+            {waste.bySauce.slice(0, 6).map((sauce, index) => (
+              <li key={sauce.sauceId}>
+                <ProgressBar
+                  label={
+                    <span className="inline-flex items-center gap-2">
+                      {sauce.sauceName}
+                      {sauce.expiredMl === sauce.ml ? (
+                        <Badge tone="warning" size="sm" icon="clock">
+                          out of date
+                        </Badge>
+                      ) : null}
+                    </span>
+                  }
+                  valueLabel={`${formatMl(sauce.ml)} · ${sauce.entries} bag${sauce.entries === 1 ? '' : 's'}`}
+                  value={sauce.ml}
+                  max={Math.max(...waste.bySauce.map((row) => row.ml), 1)}
+                  tone={index === 0 ? 'danger' : 'warning'}
+                  size="sm"
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {/* ------------------------------------------------------------------ */}
       {/* Usage trend                                                        */}

@@ -11,6 +11,7 @@ import {
   CardHeader,
   EmptyState,
   Icon,
+  SegmentedControl,
   Stepper,
   Table,
   useToast,
@@ -40,6 +41,9 @@ export function DispatchBoard({
   const [busy, startTransition] = React.useTransition()
   const [pending, setPending] = React.useState<string | null>(null)
   const [amounts, setAmounts] = React.useState<Record<string, number>>({})
+  // Some runs are counted out in litres, others in bags off the shelf. The
+  // amount sent is a volume either way — this only changes how it's entered.
+  const [unit, setUnit] = React.useState<'ml' | 'bags'>('ml')
 
   const outstanding = board.lines.filter((line) => line.remainingMl > 0)
 
@@ -129,9 +133,26 @@ export function DispatchBoard({
           </div>
 
           {outstanding.length > 0 ? (
-            <Button size="xl" leadingIcon="truck" loading={busy && !pending} onClick={sendEverything}>
-              Send everything
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <SegmentedControl
+                size="sm"
+                aria-label="Count the delivery in"
+                value={unit}
+                onChange={setUnit}
+                options={[
+                  { value: 'ml', label: 'Litres' },
+                  { value: 'bags', label: 'Bags' },
+                ]}
+              />
+              <Button
+                size="xl"
+                leadingIcon="truck"
+                loading={busy && !pending}
+                onClick={sendEverything}
+              >
+                Send everything
+              </Button>
+            </div>
           ) : null}
         </div>
       </Card>
@@ -200,17 +221,28 @@ export function DispatchBoard({
                         {line.sentMl > 0 ? 'Delivered' : 'Nothing to send'}
                       </Badge>
                     ) : (
-                      <div className="flex items-center gap-2.5 sm:shrink-0">
-                        <Stepper
-                          value={value}
-                          onChange={(next) =>
-                            setAmounts((current) => ({ ...current, [line.sauceId]: next }))
-                          }
-                          min={0}
-                          max={Math.max(line.availableMl, 1)}
-                          step={100}
-                          unit="ml"
-                        />
+                      <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-center sm:shrink-0">
+                        {unit === 'bags' ? (
+                          <BagCounter
+                            sauceName={line.sauceName}
+                            availableSizes={line.availableSizes}
+                            valueMl={value}
+                            onChange={(next) =>
+                              setAmounts((current) => ({ ...current, [line.sauceId]: next }))
+                            }
+                          />
+                        ) : (
+                          <Stepper
+                            value={value}
+                            onChange={(next) =>
+                              setAmounts((current) => ({ ...current, [line.sauceId]: next }))
+                            }
+                            min={0}
+                            max={Math.max(line.availableMl, 1)}
+                            step={100}
+                            unit="ml"
+                          />
+                        )}
                         <Button
                           size="lg"
                           leadingIcon="truck"
@@ -295,6 +327,102 @@ export function DispatchBoard({
           />
         </Card>
       ) : null}
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Counting a delivery out in bags                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A −/+ counter per bag size on the shelf, reporting the volume it adds up to.
+ *
+ * Whole bags are what physically move, so counting them is often the natural
+ * way to load a delivery — but what gets sent is still a volume, and the
+ * server picks which actual bags travel.
+ */
+function BagCounter({
+  sauceName,
+  availableSizes,
+  valueMl,
+  onChange,
+}: {
+  sauceName: string
+  availableSizes: Record<number, number>
+  valueMl: number
+  onChange: (ml: number) => void
+}) {
+  const sizes = Object.keys(availableSizes)
+    .map(Number)
+    .filter((size) => (availableSizes[size] ?? 0) > 0)
+    .sort((a, b) => b - a)
+
+  // Derived from the volume rather than held separately, so the two entry
+  // modes can't disagree about how much is going across.
+  const counts = React.useMemo(() => {
+    const result: Record<number, number> = {}
+    let outstanding = valueMl
+    for (const size of sizes) {
+      const take = Math.min(Math.floor(outstanding / size), availableSizes[size] ?? 0)
+      result[size] = Math.max(0, take)
+      outstanding -= result[size] * size
+    }
+    return result
+  }, [valueMl, sizes.join(','), availableSizes]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setCount = (size: number, next: number) => {
+    const capped = Math.max(0, Math.min(next, availableSizes[size] ?? 0))
+    const total = sizes.reduce(
+      (sum, other) => sum + other * (other === size ? capped : (counts[other] ?? 0)),
+      0,
+    )
+    onChange(total)
+  }
+
+  if (sizes.length === 0) {
+    return <span className="text-sm text-ink-subtle">No sealed bags</span>
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {sizes.map((size) => {
+        const count = counts[size] ?? 0
+        const available = availableSizes[size] ?? 0
+        return (
+          <div
+            key={size}
+            className={`flex items-center overflow-hidden rounded-lg border bg-surface ${
+              count > 0 ? 'border-brand/45' : 'border-border'
+            }`}
+          >
+            <button
+              type="button"
+              disabled={count <= 0}
+              onClick={() => setCount(size, count - 1)}
+              aria-label={`One fewer ${formatMl(size)} bag of ${sauceName}`}
+              className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
+            >
+              <Icon name="minus" size={13} />
+            </button>
+            <span className="w-[5rem] text-center text-sm font-medium tabular-nums text-ink">
+              {count}/{available} × {formatMl(size)}
+            </span>
+            <button
+              type="button"
+              disabled={count >= available}
+              onClick={() => setCount(size, count + 1)}
+              aria-label={`One more ${formatMl(size)} bag of ${sauceName}`}
+              className="grid h-10 w-7 place-items-center text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-35"
+            >
+              <Icon name="plus" size={13} />
+            </button>
+          </div>
+        )
+      })}
+      <span className="whitespace-nowrap text-sm tabular-nums text-ink-muted">
+        = {formatMl(valueMl)}
+      </span>
     </div>
   )
 }

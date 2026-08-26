@@ -35,6 +35,8 @@ export interface TrackedBag {
   siteId: string
   siteName: string
   sizeMl: number
+  /** How much is actually left in the bag — what gets binned if it expires. */
+  remainingMl: number
   prepDate: DateOnly
   status: BagStatus
   sealedExpiry: DateOnly
@@ -51,6 +53,7 @@ interface BagJoinRow {
   sauce_id: string
   site_id: string
   size_ml: number
+  remaining_ml: number
   prep_date: string
   status: BagStatus
   sealed_expiry: string
@@ -94,7 +97,7 @@ export async function getTrackedBags(options: BagQueryOptions): Promise<TrackedB
   let query = supabase
     .from('bags')
     .select(
-      'id, sauce_id, site_id, size_ml, prep_date, status, sealed_expiry, opened_at, opened_expiry, used_at, discarded_at, sauces(name), sites(name)',
+      'id, sauce_id, site_id, size_ml, remaining_ml, prep_date, status, sealed_expiry, opened_at, opened_expiry, used_at, discarded_at, sauces(name), sites(name)',
     )
     .in('status', statuses)
     .order('prep_date', { ascending: false })
@@ -127,6 +130,7 @@ export async function getTrackedBags(options: BagQueryOptions): Promise<TrackedB
       siteId: row.site_id,
       siteName: row.sites?.name ?? 'Unknown site',
       sizeMl: row.size_ml,
+      remainingMl: row.remaining_ml,
       prepDate: row.prep_date,
       status: row.status,
       sealedExpiry: row.sealed_expiry,

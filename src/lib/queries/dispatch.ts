@@ -12,6 +12,12 @@ export interface DispatchLine {
   /** Sealed stock sitting at the prep kitchen right now. */
   availableMl: number
   availableBags: number
+  /**
+   * That stock broken down by bag size — `{ 2000: 3, 1000: 1 }`. The kitchen
+   * counts a delivery in bags as often as in litres, so the screen has to be
+   * able to speak both.
+   */
+  availableSizes: Record<number, number>
   /** What the plan says this restaurant needs. */
   neededMl: number
   /** Already sent today. */
@@ -51,13 +57,15 @@ export async function getDispatchBoard(options: {
     getPlan(options.fromSiteId, options.prepDate, options.bagSizesMl),
     supabase
       .from('bags')
-      .select('sauce_id, size_ml, sauces(name, sort_order)')
+      .select('sauce_id, size_ml, remaining_ml, sauces(name, sort_order)')
       .eq('site_id', options.fromSiteId)
       .eq('status', 'sealed')
+      .gt('remaining_ml', 0)
       .returns<
         Array<{
           sauce_id: string
           size_ml: number
+          remaining_ml: number
           sauces: { name: string; sort_order: number } | null
         }>
       >(),
@@ -72,11 +80,19 @@ export async function getDispatchBoard(options: {
 
   const availableMl = new Map<string, number>()
   const availableBags = new Map<string, number>()
+  const availableSizes = new Map<string, Record<number, number>>()
   const names = new Map<string, { name: string; sortOrder: number }>()
 
   for (const bag of stockResult.data ?? []) {
-    availableMl.set(bag.sauce_id, (availableMl.get(bag.sauce_id) ?? 0) + bag.size_ml)
+    // Sealed bags are full by definition, but `remaining_ml` is the honest
+    // number to send across and stays right if that ever stops being true.
+    availableMl.set(bag.sauce_id, (availableMl.get(bag.sauce_id) ?? 0) + bag.remaining_ml)
     availableBags.set(bag.sauce_id, (availableBags.get(bag.sauce_id) ?? 0) + 1)
+
+    const sizes = availableSizes.get(bag.sauce_id) ?? {}
+    sizes[bag.size_ml] = (sizes[bag.size_ml] ?? 0) + 1
+    availableSizes.set(bag.sauce_id, sizes)
+
     if (bag.sauces) {
       names.set(bag.sauce_id, { name: bag.sauces.name, sortOrder: bag.sauces.sort_order })
     }
@@ -116,6 +132,7 @@ export async function getDispatchBoard(options: {
         sortOrder: names.get(sauceId)?.sortOrder ?? 0,
         availableMl: stock,
         availableBags: availableBags.get(sauceId) ?? 0,
+        availableSizes: availableSizes.get(sauceId) ?? {},
         neededMl,
         sentMl: alreadySent,
         sentBags: sentBags.get(sauceId) ?? 0,

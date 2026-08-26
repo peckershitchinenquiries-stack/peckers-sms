@@ -134,8 +134,8 @@ export function UsageLogger({
         title: `${formatMl(ml)} of ${sauceName} logged`,
         description:
           shortfallMl > 0
-            ? `Only ${formatMl(result.data?.opened_ml ?? 0)} of sealed stock was available — ${formatMl(shortfallMl)} more was used than the system had recorded. Check the batch log.`
-            : 'Each opened bag now has 2 days of life, capped at its sealed date.',
+            ? `Only ${formatMl(result.data?.consumed_ml ?? 0)} was on the shelf — ${formatMl(shortfallMl)} more was used than the system had recorded. Check the batch log.`
+            : 'Taken from the oldest stock first. Opened bags now have 2 days of life, capped at their sealed date.',
       })
 
       setQuantities((current) => ({ ...current, [sauceId]: 0 }))
