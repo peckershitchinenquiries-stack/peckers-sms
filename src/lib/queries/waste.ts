@@ -110,7 +110,7 @@ export async function getWasteSummary(options: {
     byDay: Array.from(byDay.entries())
       .map(([date, ml]) => ({ date, ml }))
       .sort((a, b) => (a.date < b.date ? -1 : 1)),
-    // Worst first — the point of the screen is to show what to fix.
+    // Most wasted first — the point of the screen is to show what to fix.
     bySauce: Array.from(bySauce.values()).sort((a, b) => b.ml - a.ml),
   }
 }

@@ -37,7 +37,7 @@ export function WasteReport({ summary, rate, isManager }: WasteReportProps) {
   const { toast } = useToast()
   const [busy, startTransition] = React.useTransition()
 
-  const worst = summary.bySauce[0]
+  const mostWasted = summary.bySauce[0]
   const peak = Math.max(...summary.bySauce.map((sauce) => sauce.ml), 1)
 
   const rateTone =
@@ -95,11 +95,11 @@ export function WasteReport({ summary, rate, isManager }: WasteReportProps) {
           hint={`${formatMl(rate.wastedMl)} of ${formatMl(rate.preparedMl)} prepared`}
         />
         <StatCard
-          label="Worst sauce"
-          value={worst ? formatMl(worst.ml) : '—'}
+          label="Most wasted"
+          value={mostWasted ? formatMl(mostWasted.ml) : '—'}
           icon="alert-triangle"
-          tone={worst ? 'danger' : 'neutral'}
-          hint={worst ? worst.sauceName : 'No waste recorded'}
+          tone={mostWasted ? 'danger' : 'neutral'}
+          hint={mostWasted ? mostWasted.sauceName : 'No waste recorded'}
         />
       </section>
 
@@ -136,7 +136,7 @@ export function WasteReport({ summary, rate, isManager }: WasteReportProps) {
           <CardHeader
             eyebrow={`${formatShort(summary.from)} — ${formatShort(summary.to)}`}
             title="Waste by sauce"
-            description="Worst first. A sauce near the top of this list is either being over-prepped or is not selling the way the forecast thinks it is."
+            description="Most wasted first. A sauce near the top of this list is either being over-prepped or is not selling the way the forecast thinks it is."
           />
 
           {summary.bySauce.length === 0 ? (

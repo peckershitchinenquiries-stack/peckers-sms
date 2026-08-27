@@ -122,6 +122,7 @@ The design system is browsable without signing in at `/gallery`.
 | `npm run db:seed` | Reference data only — sites, sauces, par levels. **Safe for production.** |
 | `npm run db:create-manager` | Create one real manager account from `MANAGER_EMAIL`/`MANAGER_NAME`/`MANAGER_PASSWORD`. Re-run with a different email to add more managers. |
 | `npm run db:seed:demo` | **Dev/staging only.** Adds 3 demo accounts + 6 weeks of fake usage history. Requires `SEED_DEMO_PASSWORD` (8+ chars) — there is no default. Never run this against production. |
+| `npm run db:reset:operational -- --yes` | **Go-live only.** Deletes every bag, usage log, waste log, transfer, plan, prep session and alert, plus every staff account, so the system starts recording for real. Keeps sites, sauces, par levels, settings and manager accounts. Add `--keep-staff` to leave the logins alone. Prints what it will destroy and does nothing without `--yes`. |
 
 ---
 
