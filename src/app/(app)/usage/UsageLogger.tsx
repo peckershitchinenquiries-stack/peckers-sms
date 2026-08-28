@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
   EmptyState,
   Icon,
   ProgressBar,
@@ -19,7 +20,7 @@ import {
   useToast,
 } from '@/components/ui'
 import { StockBadge } from '@/components/app/StatusPills'
-import { recordUsage } from '@/lib/actions/usage'
+import { recordUsage, undoUsageLog, UNDO_WINDOW_MINUTES } from '@/lib/actions/usage'
 import {
   daysUntilNextPrep,
   formatRelativeDay,
@@ -45,7 +46,15 @@ export interface UsageLoggerProps {
   recent: UsageEntry[]
   dailyTotals: Array<{ date: DateOnly; ml: number }>
   isManager: boolean
+  currentUserId: string
   prepWeekdays: number[]
+}
+
+/** Whoever logged an entry can undo it themselves for a short window; a manager can undo anything, any time. */
+function canUndo(row: UsageEntry, currentUserId: string, isManager: boolean): boolean {
+  if (isManager) return true
+  if (row.logged_by !== currentUserId) return false
+  return Date.now() - new Date(row.created_at).getTime() < UNDO_WINDOW_MINUTES * 60_000
 }
 
 export function UsageLogger({
@@ -58,6 +67,7 @@ export function UsageLogger({
   recent,
   dailyTotals,
   isManager,
+  currentUserId,
   prepWeekdays,
 }: UsageLoggerProps) {
   const router = useRouter()
@@ -67,6 +77,7 @@ export function UsageLogger({
   const [quantities, setQuantities] = React.useState<Record<string, number>>({})
   const [pendingSauce, setPendingSauce] = React.useState<string | null>(null)
   const [busy, startTransition] = React.useTransition()
+  const [confirmUndo, setConfirmUndo] = React.useState<UsageEntry | null>(null)
 
   const asOf = today()
   const daysToRestock = daysUntilNextPrep(asOf, prepWeekdays)
@@ -141,6 +152,30 @@ export function UsageLogger({
       setQuantities((current) => ({ ...current, [sauceId]: 0 }))
       router.refresh()
     })
+  }
+
+  const undo = async (row: UsageEntry) => {
+    const result = await undoUsageLog({
+      usageLogId: row.id,
+      loggedBy: row.logged_by,
+      createdAt: row.created_at,
+    })
+
+    if (!result.ok) {
+      toast({ tone: 'danger', title: 'Could not undo', description: result.error })
+      return
+    }
+
+    const unrecoverableMl = result.data?.ml_unrecoverable ?? 0
+    toast({
+      tone: unrecoverableMl > 0 ? 'warning' : 'success',
+      title: `${formatMl(row.ml_used)} of ${row.sauceName} undone`,
+      description:
+        unrecoverableMl > 0
+          ? `${formatMl(result.data?.ml_restored_to_stock ?? 0)} went back on the shelf. ${formatMl(unrecoverableMl)} couldn't be recovered — that stock has since expired.`
+          : 'Put back on the shelf and removed from the log.',
+    })
+    router.refresh()
   }
 
   if (!siteId) {
@@ -403,10 +438,41 @@ export function UsageLogger({
                     },
                   ]
                 : []),
+              {
+                key: 'undo',
+                header: '',
+                align: 'right',
+                width: 'w-10',
+                cell: (row) =>
+                  canUndo(row, currentUserId, isManager) ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      iconOnly
+                      leadingIcon="refresh-cw"
+                      aria-label={`Undo ${row.sauceName} logged ${formatRelativeDay(row.usage_date)}`}
+                      onClick={() => setConfirmUndo(row)}
+                    />
+                  ) : null,
+              },
             ]}
           />
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmUndo !== null}
+        onClose={() => setConfirmUndo(null)}
+        onConfirm={() => (confirmUndo ? undo(confirmUndo) : undefined)}
+        title="Undo this entry?"
+        description={
+          confirmUndo
+            ? `This removes ${formatMl(confirmUndo.ml_used)} of ${confirmUndo.sauceName} from the log and puts it back on the shelf where possible.`
+            : undefined
+        }
+        confirmLabel="Undo entry"
+        tone="destructive"
+      />
     </div>
   )
 }

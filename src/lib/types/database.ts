@@ -322,6 +322,17 @@ export interface TransferStockResult {
   shortfall_ml: number
 }
 
+/**
+ * What undo_usage_log() reports. `ml_unrecoverable` above zero means the bags
+ * this entry drew from have since expired and been discarded — that stock is
+ * genuinely gone, not silently un-wasted.
+ */
+export interface UndoUsageLogResult {
+  ml_undone: number
+  ml_restored_to_stock: number
+  ml_unrecoverable: number
+}
+
 /** The nightly sweep's tally — how much was written off past its date. */
 export interface ExpireStockResult {
   bags: number

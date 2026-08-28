@@ -44,6 +44,7 @@ export default async function UsagePage({
         recent={recent}
         dailyTotals={dailyTotals}
         isManager={context.isManager}
+        currentUserId={context.profile.id}
         prepWeekdays={context.prepWeekdays}
       />
     </>
