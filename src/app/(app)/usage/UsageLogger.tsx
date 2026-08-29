@@ -20,7 +20,8 @@ import {
   useToast,
 } from '@/components/ui'
 import { StockBadge } from '@/components/app/StatusPills'
-import { recordUsage, undoUsageLog, UNDO_WINDOW_MINUTES } from '@/lib/actions/usage'
+import { recordUsage, undoUsageLog } from '@/lib/actions/usage'
+import { UNDO_WINDOW_MINUTES } from '@/lib/actions/types'
 import {
   daysUntilNextPrep,
   formatRelativeDay,

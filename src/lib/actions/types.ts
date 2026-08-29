@@ -30,3 +30,6 @@ export function fail(error: unknown, fallback = 'Something went wrong.'): Action
   const message = error instanceof Error ? error.message : fallback
   return { ok: false, error: message }
 }
+
+/** Staff may undo their own entry only this soon after logging it. */
+export const UNDO_WINDOW_MINUTES = 30

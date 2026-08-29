@@ -5,10 +5,7 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { requireSession, requireWriteSite } from '@/lib/auth'
 import { type DateOnly, today } from '@/lib/date'
 import type { ConsumeStockResult, UndoUsageLogResult } from '@/lib/types/database'
-import { fail, ok, type ActionResult } from './types'
-
-/** Staff may undo their own entry only this soon after logging it. */
-export const UNDO_WINDOW_MINUTES = 30
+import { fail, ok, UNDO_WINDOW_MINUTES, type ActionResult } from './types'
 
 /**
  * Records the volume (ml) used for one sauce on one day.
